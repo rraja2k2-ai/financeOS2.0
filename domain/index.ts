@@ -10,3 +10,7 @@ export type { Project } from "./project";
 export type { ReceiptAttachment } from "./receipt-attachment";
 export type { TransactionHeader } from "./transaction-header";
 export type { TransactionItem } from "./transaction-item";
+export type { CaptureRequest } from "./capture-request";
+export type { CaptureFile } from "./capture-file";
+export type { CaptureSession } from "./capture-session";
+export { CaptureSource, Status } from "./capture-enums";
