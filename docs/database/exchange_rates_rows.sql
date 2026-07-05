@@ -1,0 +1,1 @@
+INSERT INTO "public"."exchange_rates" ("id", "base_currency", "target_currency", "rate", "rate_date", "source", "created_at") VALUES ('e3cd0acc-a111-4f2e-81d9-b476eb721114', 'SGD', 'USD', '1.300000', '2026-07-01', 'manual', '2026-07-05 10:42:56.987723+00');

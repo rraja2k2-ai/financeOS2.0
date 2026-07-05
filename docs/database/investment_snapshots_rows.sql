@@ -1,0 +1,1 @@
+INSERT INTO "public"."investment_snapshots" ("id", "account_id", "snapshot_month", "currency", "market_value", "exchange_rate", "market_value_sgd", "remarks", "created_at") VALUES ('46003373-1796-4ba3-a5bf-3d24125021c3', '02a780f1-6658-4662-b3bb-913ec79ae5e3', '2026-07-01', 'INR', '12.00', '12.000000', '12.00', 'adf', '2026-07-05 10:46:14.11428+00');

@@ -1,0 +1,1 @@
+INSERT INTO "public"."receipt_attachments" ("id", "header_id", "original_file_url", "thumbnail_url", "ocr_raw_text", "ai_extraction_json", "file_size_bytes", "mime_type", "created_at") VALUES ('fac75388-9f74-4dcb-abec-f106e473c6a8', '0368038f-22d6-4ccb-86fc-acd26d6bf63d', 'test', 'test', 'test', null, 1, null, '2026-07-05 10:48:27.48904+00');
