@@ -25,6 +25,19 @@ export async function list(supabase: SupabaseClient): Promise<TransactionItem[]>
   return data || [];
 }
 
+export async function listByHeaderId(supabase: SupabaseClient, headerId: string): Promise<TransactionItem[]> {
+  const { data, error } = await supabase
+    .from("transaction_items")
+    .select("*")
+    .eq("header_id", headerId);
+
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}
+
 export async function insert(supabase: SupabaseClient, item: Omit<TransactionItem, "id" | "created_at" | "updated_at">): Promise<TransactionItem> {
   const { data, error } = await supabase
     .from("transaction_items")
