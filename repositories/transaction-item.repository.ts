@@ -38,6 +38,19 @@ export async function listByHeaderId(supabase: SupabaseClient, headerId: string)
   return data || [];
 }
 
+/** Bulk fetch, e.g. all items belonging to a set of headers in a date range. */
+export async function listByHeaderIds(supabase: SupabaseClient, headerIds: string[]): Promise<TransactionItem[]> {
+  if (headerIds.length === 0) return [];
+
+  const { data, error } = await supabase.from("transaction_items").select("*").in("header_id", headerIds);
+
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}
+
 export async function insert(supabase: SupabaseClient, item: Omit<TransactionItem, "id" | "created_at" | "updated_at">): Promise<TransactionItem> {
   const { data, error } = await supabase
     .from("transaction_items")

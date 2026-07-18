@@ -4,71 +4,113 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Design tokens — approved FinanceOS mockup palette (Dashboard/Capture/Activity/
+ * Accounts/Budget artifacts). Light-first, emerald accent, dark mode via .dark.
+ * --positive/--amber/--danger-soft are semantic (money-growth / warning / critical),
+ * kept distinct from --accent so they don't compete with the brand hue.
+ *
+ * Standard shadcn slots are mapped here via var() indirection so :root/.dark only
+ * need to redefine the base custom properties, not the Tailwind utility mapping.
+ */
 @theme inline {
-  --color-surface: #041329;
-  --color-surface-container-lowest: #010e24;
-  --color-surface-container-low: #0d1c32;
-  --color-surface-container: #112036;
-  --color-surface-container-high: #1c2a41;
-  --color-surface-container-highest: #27354c;
-  --color-surface-variant: #27354c;
-  --color-on-surface: #d6e3ff;
-  --color-on-surface-variant: #c2c6d6;
-  --color-outline: #8c909f;
-  --color-outline-variant: #424754;
-  --color-primary: #adc6ff;
-  --color-on-primary: #002e6a;
-  --color-primary-container: #4d8eff;
-  --color-secondary: #4cd7f6;
-  --color-on-secondary: #003640;
-  --color-secondary-container: #03b5d3;
-  --color-tertiary: #4edea3;
-  --color-on-tertiary: #003824;
-  --color-rose: #f43f5e;
-  --color-background: #041329;
-  --color-on-background: #d6e3ff;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-full: var(--radius-full);
+
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-faint: var(--ink-faint);
+  --color-positive: var(--positive);
+  --color-positive-soft: var(--positive-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-danger-soft: var(--danger-soft);
+  --color-accent-soft: var(--accent-soft);
 }
 
 :root {
-  --background: #041329;
-  --foreground: #d6e3ff;
-  --card: #112036;
-  --card-foreground: #d6e3ff;
-  --primary: #adc6ff;
-  --primary-foreground: #002e6a;
-  --secondary: #4cd7f6;
-  --secondary-foreground: #003640;
-  --muted: #27354c;
-  --muted-foreground: #c2c6d6;
-  --accent: #4cd7f6;
-  --accent-foreground: #003640;
-  --destructive: #f43f5e;
-  --border: #424754;
-  --input: #424754;
-  --ring: #4cd7f6;
-  --radius: 0.25rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.75rem;
+  --background: #f7f8fa;
+  --foreground: #12161b;
+  --card: #ffffff;
+  --card-foreground: #12161b;
+  --primary: #1e9e6c;
+  --primary-foreground: #ffffff;
+  --secondary: #eef1f4;
+  --secondary-foreground: #12161b;
+  --muted: #eef1f4;
+  --muted-foreground: #5b6572;
+  --accent: #dcf3e8;
+  --accent-foreground: #1e9e6c;
+  --destructive: #d63a4c;
+  --border: rgba(10, 15, 20, 0.09);
+  --input: rgba(10, 15, 20, 0.09);
+  --ring: #1e9e6c;
+  --radius: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.25rem;
   --radius-full: 9999px;
+
+  --surface-2: #eef1f4;
+  --surface-3: #e4e8ec;
+  --ink-dim: #5b6572;
+  --ink-faint: #8b95a1;
+  --positive: #1e9e6c;
+  --positive-soft: #dcf3e8;
+  --amber: #b9760a;
+  --amber-soft: #f7e7cb;
+  --danger-soft: #fbe1e4;
+  --accent-soft: #dcf3e8;
 }
 
 .dark {
-  --background: #041329;
-  --foreground: #d6e3ff;
-  --card: #112036;
-  --card-foreground: #d6e3ff;
-  --primary: #adc6ff;
-  --primary-foreground: #002e6a;
-  --secondary: #4cd7f6;
-  --secondary-foreground: #003640;
-  --muted: #27354c;
-  --muted-foreground: #c2c6d6;
-  --accent: #4cd7f6;
-  --accent-foreground: #003640;
-  --destructive: #f43f5e;
-  --border: #424754;
-  --input: #424754;
-  --ring: #4cd7f6;
+  --background: #0b0f14;
+  --foreground: #edf1f5;
+  --card: #131920;
+  --card-foreground: #edf1f5;
+  --primary: #39d89a;
+  --primary-foreground: #052134;
+  --secondary: #1b232c;
+  --secondary-foreground: #edf1f5;
+  --muted: #1b232c;
+  --muted-foreground: #95a1af;
+  --accent: #132a22;
+  --accent-foreground: #39d89a;
+  --destructive: #f2697a;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: #39d89a;
+
+  --surface-2: #1b232c;
+  --surface-3: #232d38;
+  --ink-dim: #95a1af;
+  --ink-faint: #5e6b79;
+  --positive: #39d89a;
+  --positive-soft: #132a22;
+  --amber: #f0b94e;
+  --amber-soft: #2e2412;
+  --danger-soft: #301419;
+  --accent-soft: #132a22;
 }
 
 @layer base {
@@ -76,7 +118,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-on-background;
+    @apply bg-background text-foreground;
   }
   html {
     @apply font-sans;
@@ -84,41 +126,6 @@
 }
 
 @layer utilities {
-  .glass-panel {
-    background: rgba(17, 32, 54, 0.7);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(35, 53, 84, 0.5);
-  }
-
-  .ai-pulse-border {
-    position: relative;
-  }
-
-  .ai-pulse-border::after {
-    content: "";
-    position: absolute;
-    inset: -2px;
-    border: 2px solid #4cd7f6;
-    border-radius: inherit;
-    animation: pulse-glow 2s infinite;
-    pointer-events: none;
-  }
-
-  @keyframes pulse-glow {
-    0% {
-      opacity: 0.2;
-      transform: scale(1);
-    }
-    50% {
-      opacity: 0.6;
-      transform: scale(1.01);
-    }
-    100% {
-      opacity: 0.2;
-      transform: scale(1);
-    }
-  }
-
   .balance-hidden .balance-figure {
     filter: blur(7px);
     user-select: none;

@@ -3,52 +3,58 @@ import type { TransactionHeader } from "@/domain/transaction-header";
 import type { TransactionItem } from "@/domain/transaction-item";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import * as transactionItemRepository from "@/repositories/transaction-item.repository";
+import type { BuiltTransactionPayload } from "./transaction/transaction.builder";
 
 export type Transaction = {
   header: TransactionHeader;
   items: TransactionItem[];
 };
 
-export type CreateTransactionInput = {
-  header: Omit<TransactionHeader, "id" | "created_at" | "updated_at">;
-  items: Omit<TransactionItem, "id" | "created_at" | "updated_at" | "header_id">[];
-};
+/**
+ * Insert shape for the atomic save RPC — numeric fields are `number` here (what you
+ * INSERT), not the `string` TransactionHeader/TransactionItem use for what Postgres
+ * RETURNS on select. This is exactly services/transaction/transaction.builder.ts's
+ * output shape; re-exported as an alias here so callers don't need to import both.
+ */
+export type CreateTransactionInput = BuiltTransactionPayload;
 
 export type UpdateTransactionInput = {
   header: Partial<Omit<TransactionHeader, "id" | "created_at" | "updated_at">>;
   items?: (Partial<Omit<TransactionItem, "id" | "created_at" | "updated_at" | "header_id">> & { id: string })[];
 };
 
-export async function createTransaction(supabase: SupabaseClient, input: CreateTransactionInput): Promise<Transaction> {
-  // TODO: Replace with Supabase RPC atomic transaction.
+export type ReceiptAttachmentPayload = {
+  original_file_url: string;
+  thumbnail_url: string;
+  ocr_raw_text: string;
+  ai_extraction_json: unknown;
+  file_size_bytes: number;
+  mime_type: string | null;
+};
 
-  const { data: header, error: headerError } = await supabase
-    .from("transaction_headers")
-    .insert(input.header)
-    .select()
-    .single();
+/**
+ * Atomic save via the save_transaction RPC (migration 005 / TAD-003 §9): header +
+ * items + optional receipt_attachment commit or roll back together. Replaces the old
+ * two-step insert (header could succeed while items failed, corrupting the record).
+ */
+export async function createTransaction(
+  supabase: SupabaseClient,
+  input: CreateTransactionInput,
+  attachment?: ReceiptAttachmentPayload
+): Promise<Transaction> {
+  const { data, error } = await supabase.rpc("save_transaction", {
+    header: input.header,
+    items: input.items,
+    attachment: attachment ?? null,
+  });
 
-  if (headerError) {
-    throw headerError;
-  }
-
-  const itemsWithHeaderId = input.items.map((item) => ({
-    ...item,
-    header_id: header.id,
-  }));
-
-  const { data: items, error: itemsError } = await supabase
-    .from("transaction_items")
-    .insert(itemsWithHeaderId)
-    .select();
-
-  if (itemsError) {
-    throw itemsError;
+  if (error) {
+    throw error;
   }
 
   return {
-    header,
-    items: items || [],
+    header: data.header,
+    items: data.items || [],
   };
 }
 

@@ -5,7 +5,7 @@ export type TransactionHeader = {
   merchant: string;
   transaction_type: string;
   primary_category: string;
-  source_account_id: string;
+  source_account_id: string | null;
   target_account_id: string | null;
   project_id: string | null;
   currency: string;

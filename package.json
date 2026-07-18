@@ -9,10 +9,18 @@
     "lint": "eslint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:verify": "node --env-file=.env.local scripts/verify-supabase-connection.mjs"
+    "db:verify": "node --env-file=.env.local scripts/verify-supabase-connection.mjs",
+    "db:verify:migrations": "node --env-file=.env.local scripts/verify-migrations.mjs",
+    "ai:verify": "node --env-file=.env.local scripts/verify-gemini-connection.mjs",
+    "ai:test:extract": "node --env-file=.env.local --import tsx tests/ai/run-extraction.ts",
+    "ai:test:receipt": "node --env-file=.env.local --import tsx tests/ai/run-extraction-image.ts",
+    "ai:test:classify": "node --env-file=.env.local --import tsx tests/ai/run-classification.ts",
+    "ai:test:capture": "node --env-file=.env.local --import tsx tests/ai/run-capture.ts",
+    "ai:test:capture:c2": "node --env-file=.env.local --import tsx tests/ai/run-capture-c2.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@google/genai": "^2.11.0",
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.110.0",
     "class-variance-authority": "^0.7.1",
@@ -36,6 +44,7 @@
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.4",
     "tailwindcss": "^4",
+    "tsx": "^4.23.0",
     "typescript": "^5"
   }
 }

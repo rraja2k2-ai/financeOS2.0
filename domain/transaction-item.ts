@@ -1,7 +1,7 @@
 export type TransactionItem = {
   id: string;
-  header_id: string;
-  receipt_id: string;
+  header_id: string | null;
+  receipt_id: string | null;
   item_description: string;
   tags: string[] | null;
   item_group: string | null;

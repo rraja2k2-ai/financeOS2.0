@@ -1,4 +1,4 @@
-import { validateSupabaseEnv } from "@/config/env";
+import { validateSupabaseEnv } from "@/config/environment";
 
 export type SupabaseConfig = {
   url: string;
