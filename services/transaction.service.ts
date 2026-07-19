@@ -3,20 +3,42 @@ import type { TransactionHeader } from "@/domain/transaction-header";
 import type { TransactionItem } from "@/domain/transaction-item";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import * as transactionItemRepository from "@/repositories/transaction-item.repository";
-import type { BuiltTransactionPayload } from "./transaction/transaction.builder";
 
 export type Transaction = {
   header: TransactionHeader;
   items: TransactionItem[];
 };
 
-/**
- * Insert shape for the atomic save RPC — numeric fields are `number` here (what you
- * INSERT), not the `string` TransactionHeader/TransactionItem use for what Postgres
- * RETURNS on select. This is exactly services/transaction/transaction.builder.ts's
- * output shape; re-exported as an alias here so callers don't need to import both.
- */
-export type CreateTransactionInput = BuiltTransactionPayload;
+/** Insert shape for the atomic save RPC — numeric fields are `number` here (what you INSERT), not the `string` TransactionHeader/TransactionItem use for what Postgres RETURNS on select. */
+export type CreateTransactionInput = {
+  header: {
+    receipt_id: string;
+    transaction_date: string;
+    merchant: string;
+    transaction_type: string;
+    primary_category: string;
+    source_account_id: string | null;
+    target_account_id: string | null;
+    project_id: string | null;
+    currency: string;
+    original_amount: number;
+    exchange_rate: number | null;
+    sgd_total_amount: number;
+    comments: string | null;
+    status: string;
+  };
+  items: {
+    item_description: string;
+    tags: string[] | null;
+    item_group: string | null;
+    search_keywords: string[] | null;
+    primary_category: string;
+    secondary_category: string | null;
+    qty: string;
+    unit_price: number | null;
+    item_total: number;
+  }[];
+};
 
 export type UpdateTransactionInput = {
   header: Partial<Omit<TransactionHeader, "id" | "created_at" | "updated_at">>;

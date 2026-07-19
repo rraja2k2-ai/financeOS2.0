@@ -12,10 +12,6 @@
     "db:verify": "node --env-file=.env.local scripts/verify-supabase-connection.mjs",
     "db:verify:migrations": "node --env-file=.env.local scripts/verify-migrations.mjs",
     "ai:verify": "node --env-file=.env.local scripts/verify-gemini-connection.mjs",
-    "ai:test:extract": "node --env-file=.env.local --import tsx tests/ai/run-extraction.ts",
-    "ai:test:receipt": "node --env-file=.env.local --import tsx tests/ai/run-extraction-image.ts",
-    "ai:test:classify": "node --env-file=.env.local --import tsx tests/ai/run-classification.ts",
-    "ai:test:capture": "node --env-file=.env.local --import tsx tests/ai/run-capture.ts",
     "ai:test:capture:c2": "node --env-file=.env.local --import tsx tests/ai/run-capture-c2.ts"
   },
   "dependencies": {
