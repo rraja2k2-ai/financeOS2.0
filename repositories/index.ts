@@ -1,4 +1,5 @@
 export * as accountRepository from "./account.repository";
+export * as accountMappingRuleRepository from "./account-mapping-rule.repository";
 export * as projectRepository from "./project.repository";
 export * as captureQueueRepository from "./capture-queue.repository";
 export * as categorizationRuleRepository from "./categorization-rule.repository";

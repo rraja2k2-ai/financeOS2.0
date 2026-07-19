@@ -43,6 +43,16 @@ export type CaptureMasterData = {
     secondaryCategory: string | null;
     accountHint: string | null;
   }[];
+  /**
+   * Fix 4 (Simple Account Mapping Rules) — flat keyword -> account hints for
+   * headerSuggestions.account ONLY. Not a rule engine: no merchant/category rules,
+   * no priority, no chaining. See prompts/receipt-processing.prompt.ts for the
+   * matching order the AI is instructed to apply.
+   */
+  accountMappingRules: {
+    keyword: string;
+    account: string;
+  }[];
 };
 
 /** Everything the user handed us in the Capture modal, plus the session's master data. */

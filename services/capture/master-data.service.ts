@@ -6,16 +6,23 @@
  * exactly one AI call, so "once per session" = one load per Capture & Process press.)
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { accountRepository, projectRepository, categorizationRuleRepository, exchangeRateRepository } from "@/repositories";
+import {
+  accountRepository,
+  accountMappingRuleRepository,
+  projectRepository,
+  categorizationRuleRepository,
+  exchangeRateRepository,
+} from "@/repositories";
 import { CATEGORY_TAXONOMY } from "@/constants/categories";
 import { DEFAULT_BASE_CURRENCY } from "@/domain/exchange-rate";
 import type { CaptureMasterData } from "@/services/ai/ai-provider";
 
 export async function loadCaptureMasterData(supabase: SupabaseClient): Promise<CaptureMasterData> {
-  const [accounts, projects, rules, baseCurrency] = await Promise.all([
+  const [accounts, projects, rules, accountMappingRules, baseCurrency] = await Promise.all([
     accountRepository.list(supabase),
     projectRepository.list(supabase),
     categorizationRuleRepository.list(supabase),
+    accountMappingRuleRepository.list(supabase),
     exchangeRateRepository.getBaseCurrency(supabase),
   ]);
 
@@ -40,6 +47,12 @@ export async function loadCaptureMasterData(supabase: SupabaseClient): Promise<C
         primaryCategory: r.primary_category,
         secondaryCategory: r.secondary_category,
         accountHint: r.default_account_hint,
+      })),
+    accountMappingRules: accountMappingRules
+      .filter((r) => r.is_active)
+      .map((r) => ({
+        keyword: r.keyword,
+        account: r.mapped_account,
       })),
   };
 }

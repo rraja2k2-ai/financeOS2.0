@@ -221,14 +221,6 @@ export function ReviewScreen({
                 ))}
               </select>
             </FieldRow>
-            <FieldRow label="Payment">
-              <input
-                value={headerDraft.paymentMethod}
-                onChange={(e) => setHeader("paymentMethod", e.target.value)}
-                placeholder="—"
-                className={fieldInputClass}
-              />
-            </FieldRow>
             <FieldRow label="Account">
               <select value={headerDraft.account} onChange={(e) => setHeader("account", e.target.value)} className={fieldSelectClass}>
                 <option value="">—</option>
@@ -239,7 +231,7 @@ export function ReviewScreen({
                 ))}
               </select>
             </FieldRow>
-            <FieldRow label="Project">
+            <FieldRow label="Project" last>
               <select value={headerDraft.project} onChange={(e) => setHeader("project", e.target.value)} className={fieldSelectClass}>
                 <option value="">—</option>
                 {withCurrent(masterData.projects.map((p) => p.name), headerDraft.project).map((name) => (
@@ -248,9 +240,6 @@ export function ReviewScreen({
                   </option>
                 ))}
               </select>
-            </FieldRow>
-            <FieldRow label="Notes" last>
-              <input value={headerDraft.notes} onChange={(e) => setHeader("notes", e.target.value)} placeholder="—" className={fieldInputClass} />
             </FieldRow>
           </div>
         </section>

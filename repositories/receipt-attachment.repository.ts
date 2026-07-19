@@ -61,3 +61,12 @@ export async function remove(supabase: SupabaseClient, id: string): Promise<void
     throw error;
   }
 }
+
+/** Removes all attachment rows for one transaction (DB records only — Storage files are untouched). */
+export async function removeByHeaderId(supabase: SupabaseClient, headerId: string): Promise<void> {
+  const { error } = await supabase.from("receipt_attachments").delete().eq("header_id", headerId);
+
+  if (error) {
+    throw error;
+  }
+}

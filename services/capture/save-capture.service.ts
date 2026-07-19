@@ -33,6 +33,8 @@ import { GENERIC_PROJECT_NAME } from "@/domain/project";
 import { DEFAULT_BASE_CURRENCY } from "@/domain/exchange-rate";
 import type { CaptureDocumentPage } from "@/services/ai/ai-provider";
 import type { UploadedReceiptPage } from "@/repositories/receipt-storage.repository";
+import type { Account } from "@/domain/account";
+import type { Project } from "@/domain/project";
 import { receiptFolder, extForMime } from "./receipt-path";
 
 export type ReviewedHeader = {
@@ -98,10 +100,7 @@ export async function saveReviewedCapture(supabase: SupabaseClient, input: SaveC
   // 2. Resolve account/project NAMES (what the dropdowns show) to FK ids. Project
   //    defaults to Generic when the user left it empty.
   const [accounts, projects] = await Promise.all([accountRepository.list(supabase), projectRepository.list(supabase)]);
-  const sourceAccountId = accounts.find((a) => a.account_name === reviewed.header.account)?.id ?? null;
-  const projectName = reviewed.header.project.trim() || GENERIC_PROJECT_NAME;
-  const projectId =
-    projects.find((p) => p.project_name === projectName)?.id ?? projects.find((p) => p.project_name === GENERIC_PROJECT_NAME)?.id ?? null;
+  const { sourceAccountId, projectId } = resolveAccountAndProjectIds(accounts, projects, reviewed.header.account, reviewed.header.project);
 
   // 3. Totals from the REVIEWED values.
   const subtotal = round2(reviewed.items.reduce((sum, i) => sum + (Number(i.amount) || 0), 0));
@@ -196,8 +195,26 @@ function validate(reviewed: ReviewedCapture): void {
   if (reviewed.items.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) throw new SaveValidationError("Amounts cannot be negative.");
 }
 
+/**
+ * Resolves the Review screen's account/project NAME fields to FK ids — the exact same
+ * logic used at create time, reused unchanged by Fix 3's transaction-edit path so
+ * account/project resolution is never duplicated.
+ */
+export function resolveAccountAndProjectIds(
+  accounts: Account[],
+  projects: Project[],
+  accountName: string,
+  projectName: string
+): { sourceAccountId: string | null; projectId: string | null } {
+  const sourceAccountId = accounts.find((a) => a.account_name === accountName)?.id ?? null;
+  const resolvedProjectName = projectName.trim() || GENERIC_PROJECT_NAME;
+  const projectId =
+    projects.find((p) => p.project_name === resolvedProjectName)?.id ?? projects.find((p) => p.project_name === GENERIC_PROJECT_NAME)?.id ?? null;
+  return { sourceAccountId, projectId };
+}
+
 /** Header category = the item category with the highest total spend. */
-function dominantCategory(items: ReviewedItem[]): string {
+export function dominantCategory(items: ReviewedItem[]): string {
   const byCategory = new Map<string, number>();
   for (const item of items) {
     const cat = item.primaryCategory.trim();
@@ -330,6 +347,6 @@ async function persistWithCompensation(supabase: SupabaseClient, payload: Payloa
   return header.id;
 }
 
-function round2(n: number): number {
+export function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }

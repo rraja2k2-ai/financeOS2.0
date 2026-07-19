@@ -1,5 +1,6 @@
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { getActivity } from "@/services/finance/activity.service";
+import { loadCaptureMasterData } from "@/services/capture/master-data.service";
 import { ActivityView } from "@/components/activity/ActivityView";
 import { todayIso } from "@/lib/period";
 
@@ -18,8 +19,13 @@ export default async function ActivityPage({
   searchParams: Promise<{ highlight?: string }>;
 }) {
   const supabase = await createServerSupabaseClient();
-  const transactions = await getActivity(supabase, twelveMonthsAgoIso(), todayIso());
+  // masterData powers the (single, reused) Review screen's dropdowns when editing a
+  // transaction from Activity — loaded once here, no client-side queries.
+  const [transactions, masterData] = await Promise.all([
+    getActivity(supabase, twelveMonthsAgoIso(), todayIso()),
+    loadCaptureMasterData(supabase),
+  ]);
   const { highlight } = await searchParams;
 
-  return <ActivityView transactions={transactions} highlightId={highlight} />;
+  return <ActivityView transactions={transactions} highlightId={highlight} masterData={masterData} />;
 }

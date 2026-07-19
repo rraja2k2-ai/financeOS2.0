@@ -5,7 +5,7 @@ const SETTINGS_ITEMS = [
   { href: "/settings/exchange-rates", label: "Exchange Rates", description: "Manage conversion rates" },
   { href: "/settings/categories", label: "Categories", description: "Categorization taxonomy" },
   { href: "/settings/accounts", label: "Accounts", description: "Your linked accounts" },
-  { href: "/settings/ai", label: "AI", description: "Capture pipeline" },
+  { href: "/settings/ai", label: "AI", description: "Open the Capture Inbox" },
   { href: "/settings/data-management", label: "Data Management", description: "Export, reports, import" },
   { href: "/settings/about", label: "About", description: "App information" },
 ];

@@ -1,4 +1,5 @@
 export type { Account } from "./account";
+export type { AccountMappingRule } from "./account-mapping-rule";
 export type { CategorizationRule } from "./categorization-rule";
 export type { ExchangeRate, TargetCurrency, BaseCurrency } from "./exchange-rate";
 export { SUPPORTED_TARGET_CURRENCIES, BASE_CURRENCIES, DEFAULT_BASE_CURRENCY } from "./exchange-rate";

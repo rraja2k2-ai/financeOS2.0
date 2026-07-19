@@ -1,21 +1,50 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
 import { computeCategorySpendFromTransactions } from "@/services/finance/activity.service";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { TopCategoriesCard } from "@/components/shared/TopCategoriesCard";
 import { resolvePeriodRange, startOfMonthIso, todayIso, type PeriodKey } from "@/lib/period";
+import { ReviewScreen } from "@/components/capture/ReviewScreen";
+import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
+import type { ReviewedCapture } from "@/services/capture/save-capture.service";
 
 export type ActivityViewProps = {
   transactions: ActivityTransaction[];
   /** From ?highlight=<id> (Dashboard's Recent Transactions deep link) — auto-expands and scrolls to this transaction. */
   highlightId?: string;
+  /** Powers the (single, reused) Review screen's dropdowns when editing a transaction. */
+  masterData: CaptureMasterData;
+};
+
+/** An existing transaction opened for editing — fetched on demand, shaped for the SAME ReviewScreen used by Capture. */
+type EditingTransaction = {
+  headerId: string;
+  result: CaptureReceiptResult;
+  itemIds: string[];
 };
 
 function fmt(n: number, decimals = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+/**
+ * Qty is stored free text. Older rows were cast from a fixed-precision NUMERIC column
+ * and read back padded ("1.000", "0.260") — display them naturally by trimming
+ * insignificant trailing zeros from the numeric portion only, leaving any unit suffix
+ * ("0.26 kg") exactly as stored.
+ */
+function formatQty(qty: string): string {
+  const trimmed = qty.trim();
+  const match = trimmed.match(/^(-?\d+(?:\.\d+)?)(\s*.*)$/);
+  if (!match) return trimmed;
+  const [, numPart, rest] = match;
+  if (!numPart.includes(".")) return trimmed;
+  const cleanedNum = numPart.replace(/0+$/, "").replace(/\.$/, "");
+  return `${cleanedNum}${rest}`;
 }
 
 function categoryPath(primary: string | null, secondary: string | null): string {
@@ -37,7 +66,8 @@ function highlight(text: string | null | undefined, query: string) {
   );
 }
 
-export function ActivityView({ transactions, highlightId }: ActivityViewProps) {
+export function ActivityView({ transactions, highlightId, masterData }: ActivityViewProps) {
+  const router = useRouter();
   const highlightedTxn = highlightId ? transactions.find((t) => t.id === highlightId) : undefined;
 
   // A highlighted transaction might be outside "this month" or the default SGD group —
@@ -49,11 +79,85 @@ export function ActivityView({ transactions, highlightId }: ActivityViewProps) {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<string | null>(highlightId ?? null);
 
+  // Edit & Delete (Fix 3) — the transaction header's own actions, not the line items'.
+  const [editLoadingId, setEditLoadingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EditingTransaction | null>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
   useEffect(() => {
     if (!highlightId) return;
     const el = document.getElementById(`txn-${highlightId}`);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [highlightId]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  /** Loads the existing transaction and opens the SAME Review screen used by Capture, in edit mode. */
+  async function handleEdit(txnId: string) {
+    setActionError(null);
+    setEditLoadingId(txnId);
+    try {
+      const res = await fetch(`/api/transactions/${txnId}`);
+      const body = (await res.json().catch(() => null)) as { result?: CaptureReceiptResult; itemIds?: string[]; error?: string } | null;
+      if (!res.ok || !body?.result || !body?.itemIds) {
+        setActionError(body?.error ?? "Couldn't load this transaction. Try again.");
+        return;
+      }
+      setEditing({ headerId: txnId, result: body.result, itemIds: body.itemIds });
+    } catch {
+      setActionError("Couldn't reach the server. Try again.");
+    } finally {
+      setEditLoadingId(null);
+    }
+  }
+
+  /** Saves Review edits back onto the SAME transaction (UPDATE, never a new one). */
+  async function handleEditSave(reviewed: ReviewedCapture) {
+    if (!editing) return;
+    const res = await fetch(`/api/transactions/${editing.headerId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviewed, itemIds: editing.itemIds }),
+      signal: AbortSignal.timeout(60_000),
+    }).catch(() => null);
+
+    const body = res ? ((await res.json().catch(() => null)) as { updated?: boolean; error?: string } | null) : null;
+    if (!res || !res.ok || !body?.updated) {
+      throw new Error(body?.error ?? "Couldn't save changes. Your edits are safe — please try again.");
+    }
+
+    setEditing(null);
+    setToast("Transaction updated.");
+    router.refresh();
+  }
+
+  async function handleDelete(txnId: string) {
+    setActionError(null);
+    setDeleteBusyId(txnId);
+    try {
+      const res = await fetch(`/api/transactions/${txnId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        setActionError(body?.error ?? "Couldn't delete this transaction. Try again.");
+        return;
+      }
+      setToast("Transaction deleted.");
+      if (expanded === txnId) setExpanded(null);
+      router.refresh();
+    } catch {
+      setActionError("Couldn't reach the server. Try again.");
+    } finally {
+      setDeleteBusyId(null);
+      setConfirmingDeleteId(null);
+    }
+  }
 
   /**
    * Clicking a matched item in search results jumps to its parent transaction in the
@@ -246,7 +350,7 @@ export function ActivityView({ transactions, highlightId }: ActivityViewProps) {
                           {highlight(categoryPath(item.primaryCategory, item.secondaryCategory), q)}
                         </p>
                       </div>
-                      <span className="truncate text-center font-mono text-[11px] text-muted-foreground">{item.qty}</span>
+                      <span className="truncate text-center font-mono text-[11px] text-muted-foreground">{formatQty(item.qty)}</span>
                       <span className="truncate text-right font-mono font-semibold tabular-nums">
                         {item.currency} {fmt(item.itemTotal)}
                       </span>
@@ -278,39 +382,71 @@ export function ActivityView({ transactions, highlightId }: ActivityViewProps) {
                     t.id === highlightId ? "border-primary" : "border-border"
                   )}
                 >
-                  <button
-                    className="flex w-full items-center gap-3 p-3"
-                    onClick={() => setExpanded(isOpen ? null : t.id)}
-                    aria-expanded={isOpen}
-                  >
-                    <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-secondary text-[15px]">🧾</div>
-                    <div className="min-w-0 flex-1 text-left">
-                      <p className="truncate text-[13.5px] font-semibold">{highlight(t.merchant, q)}</p>
-                      <p className="truncate text-[11.5px] text-muted-foreground">
-                        {t.primaryCategory} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
-                      </p>
+                  <div className="relative">
+                    <button
+                      className="flex w-full items-center gap-3 p-3 pr-16"
+                      onClick={() => setExpanded(isOpen ? null : t.id)}
+                      aria-expanded={isOpen}
+                    >
+                      <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-secondary text-[15px]">🧾</div>
+                      <div className="min-w-0 flex-1 text-left">
+                        <p className="truncate text-[13.5px] font-semibold">{highlight(t.merchant, q)}</p>
+                        <p className="truncate text-[11.5px] text-muted-foreground">
+                          {t.primaryCategory} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      <div className="flex-none text-right">
+                        {t.currencyGroup === "INR" ? (
+                          <>
+                            <div className="font-mono text-[13.5px] font-semibold tabular-nums">₹{fmt(t.originalAmount)}</div>
+                            <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
+                          </>
+                        ) : t.currency === "SGD" ? (
+                          <div className="font-mono text-[13.5px] font-semibold tabular-nums">SGD {fmt(t.originalAmount)}</div>
+                        ) : (
+                          <>
+                            <div className="font-mono text-[13.5px] font-semibold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
+                            <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">
+                              {t.currency} {fmt(t.originalAmount)}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </button>
+
+                    {/* Header-level actions — icon-only, top-right of the transaction header. */}
+                    <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="Edit transaction"
+                        aria-label="Edit transaction"
+                        disabled={editLoadingId === t.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEdit(t.id);
+                        }}
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-[12.5px] disabled:opacity-50"
+                      >
+                        {editLoadingId === t.id ? "…" : "✏️"}
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete transaction"
+                        aria-label="Delete transaction"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActionError(null);
+                          setConfirmingDeleteId(t.id);
+                        }}
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-[12.5px] text-destructive"
+                      >
+                        🗑️
+                      </button>
                     </div>
-                    <div className="flex-none text-right">
-                      {t.currencyGroup === "INR" ? (
-                        <>
-                          <div className="font-mono text-[13.5px] font-semibold tabular-nums">₹{fmt(t.originalAmount)}</div>
-                          <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
-                        </>
-                      ) : t.currency === "SGD" ? (
-                        <div className="font-mono text-[13.5px] font-semibold tabular-nums">SGD {fmt(t.originalAmount)}</div>
-                      ) : (
-                        <>
-                          <div className="font-mono text-[13.5px] font-semibold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
-                          <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">
-                            {t.currency} {fmt(t.originalAmount)}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </button>
+                  </div>
 
                   {isOpen && (
-                    <div className="border-t border-border">
+                    <div className="border-t border-border bg-secondary/40">
                       <div className="grid grid-cols-[1fr_52px_64px] gap-2 bg-secondary px-3 py-2 text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground">
                         <span>Item</span>
                         <span className="text-center">Qty</span>
@@ -322,7 +458,7 @@ export function ActivityView({ transactions, highlightId }: ActivityViewProps) {
                             <p className="truncate font-semibold">{highlight(item.description, q)}</p>
                             <p className="truncate text-[10.5px] text-muted-foreground">{categoryPath(item.primaryCategory, item.secondaryCategory)}</p>
                           </div>
-                          <span className="truncate text-center font-mono text-[11px] text-muted-foreground">{item.qty}</span>
+                          <span className="truncate text-center font-mono text-[11px] text-muted-foreground">{formatQty(item.qty)}</span>
                           <span className="text-right font-mono font-semibold tabular-nums">{fmt(item.itemTotal)}</span>
                         </div>
                       ))}
@@ -333,6 +469,56 @@ export function ActivityView({ transactions, highlightId }: ActivityViewProps) {
             })}
           </div>
         ))
+      )}
+
+      {actionError && <p className="mt-3 text-[12px] font-semibold text-destructive">{actionError}</p>}
+
+      {/* Edit — the SAME Review screen used by Capture, populated from the saved transaction. Save UPDATEs it, never creates a new one. */}
+      {editing && (
+        <ReviewScreen
+          result={editing.result}
+          masterData={masterData}
+          onCancel={() => setEditing(null)}
+          onSave={handleEditSave}
+        />
+      )}
+
+      {/* Delete confirmation */}
+      {confirmingDeleteId && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-8" role="alertdialog" aria-label="Delete this transaction?">
+          <div className="w-full max-w-[340px] rounded-[var(--radius-lg)] border border-border bg-card p-5">
+            <p className="text-[14.5px] font-bold">Delete this transaction?</p>
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">This action cannot be undone.</p>
+            <div className="mt-4 flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setConfirmingDeleteId(null)}
+                disabled={deleteBusyId === confirmingDeleteId}
+                className="flex-1 rounded-lg border border-border py-2 text-[13px] font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDelete(confirmingDeleteId)}
+                disabled={deleteBusyId === confirmingDeleteId}
+                className="flex-1 rounded-lg bg-destructive py-2 text-[13px] font-semibold text-white disabled:opacity-50"
+              >
+                {deleteBusyId === confirmingDeleteId ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed inset-x-0 z-[80] mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2.5 text-[13px] font-semibold text-background shadow-lg"
+          style={{ bottom: "calc(96px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          {toast}
+        </div>
       )}
     </div>
   );

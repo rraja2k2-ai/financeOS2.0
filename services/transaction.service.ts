@@ -3,6 +3,7 @@ import type { TransactionHeader } from "@/domain/transaction-header";
 import type { TransactionItem } from "@/domain/transaction-item";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import * as transactionItemRepository from "@/repositories/transaction-item.repository";
+import * as receiptAttachmentRepository from "@/repositories/receipt-attachment.repository";
 
 export type Transaction = {
   header: TransactionHeader;
@@ -106,8 +107,6 @@ export async function updateTransaction(supabase: SupabaseClient, id: string, in
     await transactionHeaderRepository.update(supabase, id, input.header);
   }
 
-  let updatedItems = existingTransaction.items;
-
   if (input.items) {
     for (const itemUpdate of input.items) {
       const { id: itemId, ...itemData } = itemUpdate;
@@ -124,12 +123,19 @@ export async function updateTransaction(supabase: SupabaseClient, id: string, in
   return updatedTransaction;
 }
 
+/**
+ * Deletes the complete transaction: header, items, and receipt_attachments (DB records
+ * only — the physical file in Supabase Storage is deliberately left in place; storage
+ * cleanup is a separate concern for later).
+ */
 export async function deleteTransaction(supabase: SupabaseClient, id: string): Promise<void> {
   const existingTransaction = await getTransaction(supabase, id);
 
   if (!existingTransaction) {
     throw new Error(`Transaction with id ${id} not found`);
   }
+
+  await receiptAttachmentRepository.removeByHeaderId(supabase, id);
 
   for (const item of existingTransaction.items) {
     await transactionItemRepository.remove(supabase, item.id);

@@ -50,7 +50,7 @@ async function main() {
   console.log("[1/3] Loading master data (once per capture session)...");
   const masterData = await loadCaptureMasterData(supabase);
   console.log(
-    `      base=${masterData.baseCurrency} categories=${masterData.categories.length} accounts=${masterData.accounts.length} projects=${masterData.projects.length} rules=${masterData.categorizationRules.length}`
+    `      base=${masterData.baseCurrency} categories=${masterData.categories.length} accounts=${masterData.accounts.length} projects=${masterData.projects.length} rules=${masterData.categorizationRules.length} accountMappingRules=${masterData.accountMappingRules.length}`
   );
 
   console.log(`[2/3] Processing capture (${pages.length} page(s), context: ${userContext ? `"${userContext}"` : "none"})...`);

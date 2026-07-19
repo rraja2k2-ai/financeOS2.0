@@ -35,9 +35,11 @@ comment on column public.capture_queue.pages is 'Ordered receipt pages already u
 comment on column public.capture_queue.result_json is 'AI pipeline result once processing succeeds (drives the Review screen).';
 
 -- The app talks to Supabase with the anon key (same pattern as every other table in this
--- schema — see migration 009's note). Tables created via SQL default to RLS disabled, but
--- be explicit so a dashboard-side toggle can't silently lock the queue out.
-alter table public.capture_queue disable row level security;
+-- schema — see migration 009's note). RLS is enabled with a single permissive policy
+-- covering the app's full CRUD access (see the Database Security Audit, 2026-07-19) —
+-- intentionally one custom ALL policy rather than split per-verb, since capture_queue
+-- is a transient work-queue with no differential access pattern between verbs.
+alter table public.capture_queue enable row level security;
 
 create index if not exists idx_capture_queue_status on public.capture_queue (status);
 
