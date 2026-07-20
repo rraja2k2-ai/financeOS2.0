@@ -29,8 +29,8 @@ project, and monitor accounts and investments.
   between "correct for a multi-user SaaS" and "correct for one household's
   books," choose the latter.
 - The product's core loop is: capture a receipt (photo or text) → AI
-  extracts structured data → user reviews → transaction is saved → it shows
-  up in Activity.
+  extracts structured data → transaction is saved immediately → it shows up
+  in Activity. Review is not a step in this loop — see §5/§7.
 
 ---
 
@@ -154,7 +154,26 @@ project, and monitor accounts and investments.
 
 ## 5. Capture Architecture
 
+`capture_queue` is a **transient processing queue, not a history table.**
+Activity is the permanent transaction history. A queue row's entire purpose
+is to exist while a capture is in flight or waiting on a retry — nothing
+more.
+
 The capture pipeline, in order:
+
+```
+Capture
+  ↓
+AI
+  ↓
+Save Transaction
+  ↓
+Save Receipt
+  ↓
+Delete Queue Row
+  ↓
+Refresh Activity
+```
 
 1. **Capture Launcher** — entry point UI that starts a capture (photo,
    file, or text-only).
@@ -163,18 +182,29 @@ The capture pipeline, in order:
    and stays open with a retry path on failure so an uploaded receipt is
    never lost.
 3. **Capture Inbox** (`capture_queue`) — an async work queue. A capture
-   enqueues immediately and processes in the background; the user is never
-   blocked waiting on the AI call. Queue states: Uploading → Processing →
-   Ready for Review → Failed → (Saved = row deleted once the reviewed
-   transaction is persisted).
+   enqueues immediately (status `Processing`) and processes in the
+   background; the user is never blocked waiting on the AI call.
 4. **AI processing** — exactly **one** Gemini multimodal request per
    capture, combining OCR, extraction, and categorization. Never split into
    multiple OCR passes or multiple AI calls for the same capture.
-5. **Review Screen** — the user verifies/edits the AI's structured result
-   before it becomes a real transaction.
-6. **Save** — persists the reviewed data as a transaction header + line
-   items, atomically where the database supports it.
-7. **Activity** — the saved transaction's permanent home; see §7.
+5. **Save** — if the AI returns a result, it is saved **immediately**, with
+   no eligibility check, confidence threshold, or manual approval step:
+   transaction header + line items persisted atomically, receipt attachment
+   rows linked to the already-uploaded Storage files.
+6. **Delete the queue row** — the moment the save succeeds, its
+   `capture_queue` row is deleted outright. The queue never holds a
+   "Saved" row; the transaction in Activity **is** the record from that
+   point on.
+7. **Refresh Activity** — the saved transaction appears automatically,
+   newest first; see §7.
+
+**Only genuine failures remain in the queue** — the AI call itself
+throwing, or the save throwing (e.g. a missing exchange rate) — as status
+`Failed`, retryable, with the original receipt pages untouched so nothing
+is ever lost. `capture_queue.status` only ever holds `Processing` or
+`Failed` going forward; the column's check constraint still technically
+permits `Uploading`, `Ready for Review`, and `Saved` from before this
+cleanup, but the app never writes them again.
 
 Master data (accounts, categories, projects, categorization rules, account
 mapping rules, base currency) is loaded **once per capture session** and
@@ -227,21 +257,24 @@ reused for the whole session — no repeated queries mid-session.
 - **Minimize clicks for a personal, daily-use workflow.** This is a tool
   one person uses repeatedly, not a form for occasional enterprise users —
   optimize for speed of repeated use over guided hand-holding.
-- **Review is a safety net, not a mandatory gate.** The long-term direction
-  is for high-confidence captures to be saved with minimal friction, and for
-  Review to be where the user intervenes only when something needs a look —
-  not an unavoidable step every single time.
-- **One Review Screen, reused.** The same Review Screen component handles
-  both a fresh capture and editing an existing transaction. There is no
-  second editor anywhere in the app. Any "edit a transaction" feature must
-  route through this one component, reshaping existing data to look like a
-  fresh AI result rather than building a parallel form.
+- **Review is not part of the capture flow.** A successful AI result is
+  saved immediately, with no manual approval step. The Review Screen
+  component still exists and is still the single shared editor, but it is
+  reached only from Activity's Edit action — never from a fresh capture.
+- **One Review Screen, reused — now Edit-only.** The same Review Screen
+  component that once gated every capture now only edits an already-saved
+  transaction. There is no second editor anywhere in the app. Any future
+  "edit" surface must route through this one component, reshaping existing
+  data to look like a fresh AI result rather than building a parallel form.
 - **Activity is the source of truth** for what has been saved. Once a
   transaction is saved, Activity is where it lives, is displayed, is edited,
-  and is deleted from — not a second parallel transaction list.
-- Header-level actions on a transaction (edit, delete) are icon-only,
-  positioned in the transaction header, with hover tooltips on desktop —
-  they do not carry text labels.
+  viewed (its original receipt), and is deleted from — not a second
+  parallel transaction list. Activity refreshes itself automatically when a
+  background capture finishes, newest transaction first — the user is never
+  required to manually reload to see it.
+- Header-level actions on a transaction (edit, view receipt, delete) live
+  behind a single `⋮` overflow menu in the transaction header — icon-only,
+  no permanently visible action buttons.
 
 ---
 
@@ -312,13 +345,16 @@ transaction system of record, RLS with granular per-verb policies.
 
 **Completed milestones:**
 - Capture Inbox (async queue, background AI processing, retry-safe).
-- Review Screen (create + edit, shared component).
+- Review Screen (shared component; now Edit-only — see §7).
 - Save (atomic transaction persistence, receipt attachment linking).
-- Activity (list, search, Edit/Delete on saved transactions).
+- Activity (list, search, Edit/View Receipt/Delete via a header overflow
+  menu, auto-refreshing when a background capture finishes).
 - Simple Account Mapping Rules (keyword/card-digit/user-context hints for
   source account identification — AI hints only, not a rule engine).
 - Database security cleanup (legacy blanket policies removed, granular
   CRUD policies standardized, obsolete `app_settings` table removed).
+- Auto Save (a successful AI result is saved immediately, no manual Review
+  step, no eligibility/confidence gating — see §5/§7).
 
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.
@@ -339,8 +375,6 @@ direction, not a passing suggestion.
   Intent Detection → Validate Accounts → Direct Save → Activity. Not yet
   implemented; requires its own milestone and design before any code is
   written.
-- **Auto Save / optional Review.** Direction described in §7 — letting
-  high-confidence captures skip Review — is a settled goal, not yet built.
 - **Investment module.** Data model exists (`investment_events`,
   `investment_snapshots`, `investment_account_summary`); no UI/workflow
   built on top of it yet.

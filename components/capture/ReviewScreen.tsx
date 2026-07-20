@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { BASE_CURRENCIES, SUPPORTED_TARGET_CURRENCIES } from "@/domain/exchange-rate";
 import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
 import type { ReviewedCapture } from "@/services/capture/save-capture.service";
+import { reviewedFromResult } from "@/services/capture/reviewed-from-result";
 
 /**
  * FinanceOS Review Screen (C3) — replaces the temporary Developer Viewer.
@@ -40,24 +41,10 @@ const CURRENCIES: string[] = [...new Set<string>([...BASE_CURRENCIES, ...SUPPORT
 const DEFAULT_PROJECT = "Generic";
 
 function draftsFromResult(result: CaptureReceiptResult): { header: HeaderDraft; items: ItemDraft[] } {
+  const reviewed = reviewedFromResult(result);
   return {
-    header: {
-      merchant: result.header.merchant ?? "",
-      transactionDate: result.header.transactionDate ?? "",
-      currency: result.header.currency ?? "",
-      paymentMethod: result.header.paymentMethod ?? "",
-      account: result.headerSuggestions.account ?? "",
-      project: result.headerSuggestions.project ?? DEFAULT_PROJECT,
-      notes: result.header.notes ?? "",
-    },
-    items: result.items.map((item) => ({
-      description: item.description,
-      // Qty is a single free-text field combining value + unit ("0.26 kg", "2 pcs").
-      qty: [item.qty !== null ? String(item.qty) : null, item.unit].filter(Boolean).join(" "),
-      amount: item.lineAmount !== null ? String(item.lineAmount) : "",
-      primaryCategory: item.primaryCategory ?? "",
-      secondaryCategory: item.secondaryCategory ?? "",
-    })),
+    header: { ...reviewed.header, project: reviewed.header.project || DEFAULT_PROJECT },
+    items: reviewed.items,
   };
 }
 

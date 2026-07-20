@@ -4,6 +4,11 @@ import { loadCaptureMasterData } from "@/services/capture/master-data.service";
 import { ActivityView } from "@/components/activity/ActivityView";
 import { todayIso } from "@/lib/period";
 
+// Auto-save (UX refresh Phase F) can insert a new transaction here from a background
+// job, outside any request Activity itself is part of — same reasoning as Inbox's own
+// dynamic export: never serve a cached render.
+export const dynamic = "force-dynamic";
+
 // One upfront fetch, then period/search/group filtering happens client-side (see
 // ActivityView) — 12 months gives the "Custom date" range meaningful room without
 // needing a server round-trip per date change.

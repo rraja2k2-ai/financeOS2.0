@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -9,6 +9,12 @@ import { usePathname } from "next/navigation";
  * from every page. Shown ONLY while at least one queue item has status Processing;
  * hidden automatically the moment none do. Clicking opens the Capture Inbox. No banners,
  * no interruptions.
+ *
+ * UX refresh Phase F: since this is the one component mounted on every page, it's also
+ * the natural place to notice "a background capture just finished" (processing count
+ * dropped) and broadcast the SAME `financeos:inbox-changed` event already used for
+ * enqueue/retry/delete — Activity (and anything else) listens for that one event rather
+ * than each page polling its own queue-status endpoint.
  */
 
 const POLL_MS = 7000;
@@ -16,13 +22,19 @@ const POLL_MS = 7000;
 export function InboxIndicator() {
   const pathname = usePathname();
   const [processingCount, setProcessingCount] = useState(0);
+  const prevCountRef = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
       const res = await fetch("/api/inbox", { cache: "no-store" });
       const body = (await res.json().catch(() => null)) as { items?: { status: string }[] } | null;
       const items = body?.items ?? [];
-      setProcessingCount(items.filter((i) => i.status === "Processing").length);
+      const count = items.filter((i) => i.status === "Processing").length;
+      if (count < prevCountRef.current) {
+        window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+      }
+      prevCountRef.current = count;
+      setProcessingCount(count);
     } catch {
       // Network hiccup — keep the previous count; next poll will correct it.
     }

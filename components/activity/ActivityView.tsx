@@ -9,6 +9,7 @@ import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { TopCategoriesCard } from "@/components/shared/TopCategoriesCard";
 import { resolvePeriodRange, startOfMonthIso, todayIso, type PeriodKey } from "@/lib/period";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
+import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
 import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
 import type { ReviewedCapture } from "@/services/capture/save-capture.service";
 
@@ -32,19 +33,20 @@ function fmt(n: number, decimals = 2) {
 }
 
 /**
- * Qty is stored free text. Older rows were cast from a fixed-precision NUMERIC column
- * and read back padded ("1.000", "0.260") — display them naturally by trimming
- * insignificant trailing zeros from the numeric portion only, leaving any unit suffix
- * ("0.26 kg") exactly as stored.
+ * Qty is stored free text (Fix 5.2). Weight/volume/etc. units are shown exactly as
+ * extracted — never reformatted. Only when no unit is present (a bare piece count, e.g.
+ * from a legacy fixed-precision NUMERIC cast like "1.000") do we trim insignificant
+ * trailing zeros and apply "PC", FinanceOS's standard default unit of measure. This is
+ * presentation-only — the stored qty text is never rewritten.
  */
 function formatQty(qty: string): string {
   const trimmed = qty.trim();
-  const match = trimmed.match(/^(-?\d+(?:\.\d+)?)(\s*.*)$/);
+  const match = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(.*)$/);
   if (!match) return trimmed;
-  const [, numPart, rest] = match;
-  if (!numPart.includes(".")) return trimmed;
-  const cleanedNum = numPart.replace(/0+$/, "").replace(/\.$/, "");
-  return `${cleanedNum}${rest}`;
+  const [, numPart, unitPart] = match;
+  if (unitPart.trim()) return trimmed;
+  const cleanedNum = numPart.includes(".") ? numPart.replace(/0+$/, "").replace(/\.$/, "") || "0" : numPart;
+  return `${cleanedNum} PC`;
 }
 
 function categoryPath(primary: string | null, secondary: string | null): string {
@@ -87,6 +89,11 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   const [actionError, setActionError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
+  // Header overflow menu (UX refresh Phase C) + Receipt Viewer (Phase D).
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+  const [viewingReceipt, setViewingReceipt] = useState<ReceiptViewerPage[] | null>(null);
+
   useEffect(() => {
     if (!highlightId) return;
     const el = document.getElementById(`txn-${highlightId}`);
@@ -98,6 +105,18 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Auto-save (Phase F) happens in the background, outside any request this page is
+  // part of — refresh when the global Inbox indicator signals a capture just finished
+  // (same event enqueue/retry/delete already dispatch), so a newly saved transaction
+  // shows up without the user manually reloading.
+  useEffect(() => {
+    function onChanged() {
+      router.refresh();
+    }
+    window.addEventListener("financeos:inbox-changed", onChanged);
+    return () => window.removeEventListener("financeos:inbox-changed", onChanged);
+  }, [router]);
 
   /** Loads the existing transaction and opens the SAME Review screen used by Capture, in edit mode. */
   async function handleEdit(txnId: string) {
@@ -156,6 +175,29 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
     } finally {
       setDeleteBusyId(null);
       setConfirmingDeleteId(null);
+    }
+  }
+
+  /** Loads signed URLs for the transaction's stored receipt pages and opens the full-screen viewer. */
+  async function handleViewReceipt(txnId: string) {
+    setActionError(null);
+    setReceiptLoadingId(txnId);
+    try {
+      const res = await fetch(`/api/transactions/${txnId}/receipt`);
+      const body = (await res.json().catch(() => null)) as { pages?: ReceiptViewerPage[]; error?: string } | null;
+      if (!res.ok || !body?.pages) {
+        setActionError(body?.error ?? "Couldn't load the receipt. Try again.");
+        return;
+      }
+      if (body.pages.length === 0) {
+        setActionError("No receipt was attached to this transaction.");
+        return;
+      }
+      setViewingReceipt(body.pages);
+    } catch {
+      setActionError("Couldn't reach the server. Try again.");
+    } finally {
+      setReceiptLoadingId(null);
     }
   }
 
@@ -246,7 +288,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
       : { "this-month": "This month", last3: "Last 3 months", last6: "Last 6 months" }[period];
 
   return (
-    <div className="px-5 pt-6">
+    <div className="px-5 pt-6" onClick={() => setMenuOpenId(null)}>
       <h1 className="mb-4 text-[22px] font-bold tracking-tight">Activity</h1>
 
       <PeriodSelector
@@ -329,29 +371,24 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
                   {new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" })}
                 </p>
                 <div className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-card">
-                  <div className="grid grid-cols-[1fr_52px_72px] gap-2 bg-secondary px-3 py-2 text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground">
-                    <span>Item</span>
-                    <span className="text-center">Qty</span>
-                    <span className="text-right">Amount</span>
-                  </div>
                   {items.map((item, i) => (
                     <button
                       key={item.id}
                       onClick={() => jumpToTransaction(item.txnId)}
                       className={cn(
-                        "grid w-full grid-cols-[1fr_52px_72px] gap-2 px-3 py-2.5 text-left text-[12px]",
+                        "flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left text-[12px]",
                         i > 0 && "border-t border-border"
                       )}
                     >
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold">{highlight(item.description, q)}</p>
-                        <p className="truncate text-[10.5px] text-muted-foreground">{highlight(item.merchant, q)}</p>
-                        <p className="truncate text-[10.5px] text-muted-foreground">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold">{highlight(item.description, q)}</p>
+                        <p className="mt-0.5 text-[10.5px] text-muted-foreground">{highlight(item.merchant, q)}</p>
+                        <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+                          {formatQty(item.qty) ? `${formatQty(item.qty)} | ` : ""}
                           {highlight(categoryPath(item.primaryCategory, item.secondaryCategory), q)}
                         </p>
                       </div>
-                      <span className="truncate text-center font-mono text-[11px] text-muted-foreground">{formatQty(item.qty)}</span>
-                      <span className="truncate text-right font-mono font-semibold tabular-nums">
+                      <span className="flex-none text-right font-mono font-semibold tabular-nums">
                         {item.currency} {fmt(item.itemTotal)}
                       </span>
                     </button>
@@ -381,10 +418,11 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
                     "mb-2 overflow-hidden rounded-[var(--radius-md)] border bg-card",
                     t.id === highlightId ? "border-primary" : "border-border"
                   )}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <div className="relative">
                     <button
-                      className="flex w-full items-center gap-3 p-3 pr-16"
+                      className="flex w-full items-center gap-3 p-3 pr-11"
                       onClick={() => setExpanded(isOpen ? null : t.id)}
                       aria-expanded={isOpen}
                     >
@@ -414,54 +452,86 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
                       </div>
                     </button>
 
-                    {/* Header-level actions — icon-only, top-right of the transaction header. */}
-                    <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+                    {/* Header-level actions — a single overflow menu, top-right of the transaction header. */}
+                    <div className="absolute right-2 top-2 z-10">
                       <button
                         type="button"
-                        title="Edit transaction"
-                        aria-label="Edit transaction"
-                        disabled={editLoadingId === t.id}
+                        aria-label="Transaction actions"
+                        title="Transaction actions"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleEdit(t.id);
+                          setMenuOpenId(menuOpenId === t.id ? null : t.id);
                         }}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-[12.5px] disabled:opacity-50"
+                        className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground"
                       >
-                        {editLoadingId === t.id ? "…" : "✏️"}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                          <circle cx="12" cy="5" r="1.8" />
+                          <circle cx="12" cy="12" r="1.8" />
+                          <circle cx="12" cy="19" r="1.8" />
+                        </svg>
                       </button>
-                      <button
-                        type="button"
-                        title="Delete transaction"
-                        aria-label="Delete transaction"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActionError(null);
-                          setConfirmingDeleteId(t.id);
-                        }}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-[12.5px] text-destructive"
-                      >
-                        🗑️
-                      </button>
+                      {menuOpenId === t.id && (
+                        <div className="absolute right-0 top-8 z-20 w-44 overflow-hidden rounded-[var(--radius-md)] border border-border bg-card shadow-lg">
+                          <button
+                            type="button"
+                            disabled={editLoadingId === t.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMenuOpenId(null);
+                              handleEdit(t.id);
+                            }}
+                            className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
+                          >
+                            {editLoadingId === t.id ? "Loading…" : "Edit"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={receiptLoadingId === t.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMenuOpenId(null);
+                              handleViewReceipt(t.id);
+                            }}
+                            className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
+                          >
+                            {receiptLoadingId === t.id ? "Loading…" : "View Receipt"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMenuOpenId(null);
+                              setActionError(null);
+                              setConfirmingDeleteId(t.id);
+                            }}
+                            className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold text-destructive"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 
                   {isOpen && (
-                    <div className="border-t border-border bg-secondary/40">
-                      <div className="grid grid-cols-[1fr_52px_64px] gap-2 bg-secondary px-3 py-2 text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground">
-                        <span>Item</span>
-                        <span className="text-center">Qty</span>
-                        <span className="text-right">Amount</span>
-                      </div>
-                      {t.items.map((item) => (
-                        <div key={item.id} className="grid grid-cols-[1fr_52px_64px] gap-2 border-t border-border px-3 py-2 text-[12px]">
-                          <div className="min-w-0">
-                            <p className="truncate font-semibold">{highlight(item.description, q)}</p>
-                            <p className="truncate text-[10.5px] text-muted-foreground">{categoryPath(item.primaryCategory, item.secondaryCategory)}</p>
+                    <div className="border-t border-border bg-secondary p-2">
+                      <div className="overflow-hidden rounded-[var(--radius-md)] border border-border/70 bg-card">
+                        {t.items.map((item, i) => (
+                          <div
+                            key={item.id}
+                            className={cn("flex items-start justify-between gap-3 px-3 py-2.5 text-[12px]", i > 0 && "border-t border-border")}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold">{highlight(item.description, q)}</p>
+                              <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+                                {formatQty(item.qty) ? `${formatQty(item.qty)} | ` : ""}
+                                {categoryPath(item.primaryCategory, item.secondaryCategory)}
+                              </p>
+                            </div>
+                            <span className="flex-none text-right font-mono font-semibold tabular-nums">{fmt(item.itemTotal)}</span>
                           </div>
-                          <span className="truncate text-center font-mono text-[11px] text-muted-foreground">{formatQty(item.qty)}</span>
-                          <span className="text-right font-mono font-semibold tabular-nums">{fmt(item.itemTotal)}</span>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -482,6 +552,9 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
           onSave={handleEditSave}
         />
       )}
+
+      {/* View Receipt — reuses the stored original file(s), read-only. */}
+      {viewingReceipt && <ReceiptViewer pages={viewingReceipt} onClose={() => setViewingReceipt(null)} />}
 
       {/* Delete confirmation */}
       {confirmingDeleteId && (

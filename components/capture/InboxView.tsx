@@ -1,20 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import type { CaptureQueueStatus } from "@/domain/capture-queue";
-import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
-import type { ReviewedCapture } from "@/services/capture/save-capture.service";
 
 /**
- * Capture Inbox — a WORK QUEUE focused on items needing attention (UX refinement pass).
- * Every capture lives in capture_queue across its whole lifecycle (Processing → Ready for
- * Review / Failed → Saved). Saved items are never deleted automatically — they stay in
- * the queue, just hidden from the default "Active" view. Review reuses the EXISTING
- * ReviewScreen unchanged; no backend/queue-lifecycle logic changes here.
+ * Capture Inbox — a TRANSIENT PROCESSING QUEUE (Fix 5.1), not a history table. A capture
+ * lives here only while it's Processing or, if it failed, waiting on a retry — a
+ * successful save deletes the row immediately, so nothing here is ever "done." Activity
+ * is the permanent transaction history. There is no Review step reachable from this
+ * screen; ReviewScreen is used only from Activity's Edit action.
  */
 
 export type InboxCard = {
@@ -30,8 +26,6 @@ export type InboxCard = {
   isPdf: boolean;
   thumbnailUrl: string | null;
   captureSource: string;
-  transactionHeaderId: string | null;
-  resultJson: CaptureReceiptResult | null;
 };
 
 type FilterKey = "active" | CaptureQueueStatus;
@@ -57,15 +51,12 @@ function sourceLabel(source: string): string {
 
 export function InboxView({
   cards,
-  masterData,
   queueUnavailable,
 }: {
   cards: InboxCard[];
-  masterData: CaptureMasterData | null;
   queueUnavailable: boolean;
 }) {
   const router = useRouter();
-  const [reviewing, setReviewing] = useState<InboxCard | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -89,28 +80,24 @@ export function InboxView({
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Counts drive the filter chips — Active is the union of Processing/Ready/Failed.
+  // Counts drive the filter chips. "active" is every row in the queue — with Saved gone,
+  // Processing + Failed is the whole queue, but keeping it lets Failed still be isolated.
   const counts = useMemo(() => {
     const processing = cards.filter((c) => c.status === "Processing").length;
-    const ready = cards.filter((c) => c.status === "Ready for Review").length;
     const failed = cards.filter((c) => c.status === "Failed").length;
-    const saved = cards.filter((c) => c.status === "Saved").length;
-    return { active: processing + ready + failed, processing, ready, failed, saved };
+    return { active: processing + failed, processing, failed };
   }, [cards]);
 
   const filters: { key: FilterKey; label: string; count: number }[] = [
     { key: "active", label: "Active", count: counts.active },
     { key: "Processing", label: "Processing", count: counts.processing },
-    { key: "Ready for Review", label: "Ready", count: counts.ready },
     { key: "Failed", label: "Failed", count: counts.failed },
-    { key: "Saved", label: "Saved", count: counts.saved },
   ];
 
   const visibleCards = useMemo(() => {
     const q = query.trim().toLowerCase();
     return cards.filter((c) => {
-      // Active view = the work queue: Processing/Ready/Failed, never Saved.
-      const matchesFilter = filter === "active" ? c.status !== "Saved" : c.status === filter;
+      const matchesFilter = filter === "active" || c.status === filter;
       if (!matchesFilter) return false;
       if (!q) return true;
       return (c.merchant ?? "").toLowerCase().includes(q) || c.contextSnippet.toLowerCase().includes(q);
@@ -150,31 +137,6 @@ export function InboxView({
       setBusyId(null);
       setConfirmingDeleteId(null);
     }
-  }
-
-  /**
-   * Persist via the Inbox save endpoint (the receipt is already in Storage). On success:
-   * show the checkmark toast, close Review automatically, refresh so the item's status
-   * flips to Saved — it then disappears from Active on its own (no manual cleanup).
-   */
-  async function handleSave(reviewed: ReviewedCapture) {
-    if (!reviewing) return;
-    const res = await fetch(`/api/inbox/${reviewing.id}/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reviewed }),
-      signal: AbortSignal.timeout(90_000),
-    }).catch(() => null);
-
-    const body = res ? ((await res.json().catch(() => null)) as { saved?: unknown; error?: string } | null) : null;
-    if (!res || !res.ok || !body?.saved) {
-      throw new Error(body?.error ?? "Couldn't save the transaction. Your review is safe — please try again.");
-    }
-
-    setReviewing(null);
-    setToast("✓ Transaction saved successfully.");
-    router.refresh();
-    window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
   }
 
   return (
@@ -283,7 +245,7 @@ export function InboxView({
                         }}
                         className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold text-destructive"
                       >
-                        {card.status === "Saved" ? "Delete from Queue" : "Delete"}
+                        Delete
                       </button>
                     </div>
                   )}
@@ -292,16 +254,6 @@ export function InboxView({
 
               {/* Actions */}
               <div className="mt-2.5 flex items-center gap-2">
-                {card.status === "Ready for Review" && (
-                  <button
-                    type="button"
-                    disabled={busyId === card.id || !masterData}
-                    onClick={() => setReviewing(card)}
-                    className="rounded-lg bg-primary px-3.5 py-1.5 text-[12.5px] font-semibold text-primary-foreground disabled:opacity-50"
-                  >
-                    Review
-                  </button>
-                )}
                 {card.status === "Failed" && (
                   <button
                     type="button"
@@ -312,19 +264,11 @@ export function InboxView({
                     {busyId === card.id ? "Retrying…" : "Retry"}
                   </button>
                 )}
-                {card.status === "Saved" && card.transactionHeaderId && (
-                  <Link
-                    href={`/activity?highlight=${card.transactionHeaderId}`}
-                    className="rounded-lg border border-border px-3.5 py-1.5 text-[12.5px] font-semibold"
-                  >
-                    View
-                  </Link>
-                )}
 
                 {confirmingDeleteId === card.id && (
                   <>
                     <span className="ml-auto max-w-[160px] text-right text-[10.5px] leading-tight text-muted-foreground">
-                      {card.transactionHeaderId ? "This won't delete the saved transaction." : "Delete this capture?"}
+                      Delete this capture?
                     </span>
                     <button
                       type="button"
@@ -347,11 +291,6 @@ export function InboxView({
             </div>
           ))}
         </div>
-      )}
-
-      {/* Review — the EXISTING Review screen, unchanged. */}
-      {reviewing && reviewing.resultJson && masterData && (
-        <ReviewScreen result={reviewing.resultJson} masterData={masterData} onCancel={() => setReviewing(null)} onSave={handleSave} />
       )}
 
       {toast && (
@@ -380,18 +319,10 @@ function ProgressLine({ card }: { card: InboxCard }) {
 
   let text: string;
   let tone = "text-muted-foreground";
-  if (card.status === "Uploading") {
-    text = "Uploading receipt...";
-  } else if (card.status === "Processing") {
+  if (card.status === "Processing") {
     const elapsed = Date.now() - new Date(card.updatedAt).getTime();
     const stage = Math.min(Math.floor(elapsed / 6000), PROCESSING_STAGES.length - 1);
     text = PROCESSING_STAGES[Math.max(0, stage)];
-  } else if (card.status === "Ready for Review") {
-    text = "Ready for review";
-    tone = "text-primary";
-  } else if (card.status === "Saved") {
-    text = "Saved to Activity";
-    tone = "text-primary";
   } else {
     text = card.errorMessage ?? "Failed";
     tone = "text-destructive";
@@ -401,15 +332,10 @@ function ProgressLine({ card }: { card: InboxCard }) {
 }
 
 function StatusChip({ status }: { status: CaptureQueueStatus }) {
-  const styles =
-    status === "Ready for Review" || status === "Saved"
-      ? "bg-primary/15 text-primary"
-      : status === "Failed"
-        ? "bg-destructive/15 text-destructive"
-        : "bg-secondary text-muted-foreground";
+  const styles = status === "Failed" ? "bg-destructive/15 text-destructive" : "bg-secondary text-muted-foreground";
   return (
     <span className={cn("mt-0.5 flex-none rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide", styles)}>
-      {status === "Ready for Review" ? "Ready" : status}
+      {status}
     </span>
   );
 }

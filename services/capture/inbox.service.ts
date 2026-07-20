@@ -1,38 +1,49 @@
 /**
- * Capture Inbox service (C5, finalized against the frozen capture_queue schema) — the
- * queue/orchestration layer between Capture and Save.
+ * Capture Inbox service — the queue/orchestration layer between Capture and Save.
+ *
+ * Fix 5.1: capture_queue is a TRANSIENT PROCESSING QUEUE, not a history table. Activity
+ * is the permanent transaction history; a queue row's job ends the moment its capture
+ * either becomes a transaction or needs a retry.
  *
  * Lifecycle:
  *   enqueueCapture()   upload pages to Storage + insert a queue row (status=Processing,
- *                      retry_count=0, transaction_header_id=null)
+ *                      retry_count=0)
  *   processQueueItem() runs in the background (Next's after()); for the item's stored
- *                      pages + context, runs the EXISTING AI pipeline:
- *                        success → status=Ready for Review, result_json, merchant, ai_provider
- *                        failure → status=Failed, error_message, retry_count += 1
- *                      Pages are never touched/removed on failure — the receipt is never lost.
+ *                      pages + context, runs the EXISTING AI pipeline, and if it returns a
+ *                      result, saves it IMMEDIATELY via the EXISTING Save flow — no
+ *                      eligibility check, no confidence threshold, no account-resolution
+ *                      gate, no manual Review step:
+ *                        success → transaction + receipt_attachments persisted, THEN the
+ *                          queue row is DELETED immediately (never left behind as "Saved")
+ *                        failure (AI call OR the save itself) → status=Failed, error_message,
+ *                          retry_count += 1 — the row stays for retry, pages untouched
  *   retryQueueItem()   Failed → Processing, retry_count += 1, error_message=null, then the
  *                      SAME processQueueItem() runs again — no duplicated processing logic.
- *   (save)             services/capture/save-capture.service.ts (unchanged) persists the
- *                      transaction; the caller then marks this row status=Saved and sets
- *                      transaction_header_id — pages/result_json/merchant are left as-is.
- *   deleteQueueItem()  removes only the queue row (+ its Storage files, UNLESS the item is
- *                      already Saved, since a saved transaction's receipt_attachments then
- *                      references those same Storage paths). Never touches transaction_headers.
+ *   deleteQueueItem()  user-initiated delete from the Inbox — removes the queue row AND its
+ *                      Storage files. Only ever called on a Processing/Failed row (nothing
+ *                      reaches this queue is ever "Saved" — see above), so it's always safe
+ *                      to remove the files; they aren't referenced by any transaction yet.
+ *                      Never touches transaction_headers.
  *
  * Reuses the existing pipeline pieces untouched: master-data.service, capture.service
- * (processCapture), the provider factory, and the Storage repository. No transaction
- * tables are written here — the queue is completely independent from Activity.
+ * (processCapture), save-capture.service (saveReviewedCapture, unmodified), the provider
+ * factory, and the Storage repository. The Review Screen component itself is untouched —
+ * no code path in the capture flow renders it; it is reachable only from Activity's Edit
+ * action.
  */
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { revalidatePath } from "next/cache";
 import { getSupabaseConfig } from "@/config/supabase";
 import * as captureQueueRepository from "@/repositories/capture-queue.repository";
 import * as receiptStorageRepository from "@/repositories/receipt-storage.repository";
 import { RECEIPTS_BUCKET } from "@/repositories/receipt-storage.repository";
 import { loadCaptureMasterData } from "./master-data.service";
 import { processCapture } from "./capture.service";
+import { saveReviewedCapture, SaveValidationError } from "./save-capture.service";
+import { reviewedFromResult } from "./reviewed-from-result";
 import { getActiveCaptureProviderName } from "@/services/ai/providers";
-import { friendlyCaptureError, type CaptureDocumentPage, type CaptureReceiptResult } from "@/services/ai/ai-provider";
+import { friendlyCaptureError, type CaptureDocumentPage } from "@/services/ai/ai-provider";
 import type { CaptureQueueItem, CaptureQueuePage, CaptureQueueStatus, CaptureSourceKind } from "@/domain/capture-queue";
 import { receiptFolder, extForMime } from "./receipt-path";
 
@@ -82,10 +93,13 @@ export async function enqueueCapture(
 }
 
 /**
- * The background step: runs the EXISTING AI pipeline against the stored pages + context
- * and records the outcome on the queue row. Never throws — a failure becomes status
- * 'Failed' with a friendly message so the receipt is never lost. Writes only the fields
- * that changed (no full-row rewrites).
+ * The background step: runs the EXISTING AI pipeline against the stored pages + context,
+ * then — if it returns a result — saves it IMMEDIATELY via the EXISTING Save flow and
+ * deletes the queue row (Fix 5.1 — the queue never keeps a "Saved" row; Activity is the
+ * permanent record). No eligibility logic: if the AI successfully returns a transaction,
+ * it gets saved; if anything in that chain throws (the AI call, or the save itself), the
+ * item becomes Failed with a friendly message so the receipt is never lost and the user
+ * can retry.
  */
 export async function processQueueItem(queueId: string): Promise<void> {
   const supabase = createBackgroundSupabaseClient();
@@ -104,21 +118,37 @@ export async function processQueueItem(queueId: string): Promise<void> {
     const masterData = await loadCaptureMasterData(supabase);
     const result = await processCapture({ userContext: row.user_context, pages, masterData });
 
-    await captureQueueRepository.update(supabase, queueId, {
-      status: "Ready for Review",
-      result_json: result,
-      merchant: result.header.merchant,
-      ai_provider: getActiveCaptureProviderName(),
+    await saveReviewedCapture(supabase, {
+      reviewed: reviewedFromResult(result),
+      aiContext: row.user_context,
+      pages: [],
+      preUploadedPages: [...row.pages]
+        .sort((a, b) => a.pageNo - b.pageNo)
+        .map((p) => ({ storagePath: p.storagePath, mimeType: p.mimeType, fileSizeBytes: p.fileSizeBytes })),
+      audit: { aiProvider: getActiveCaptureProviderName(), processedAt: row.updated_at, captureSource: row.capture_source },
     });
+
+    // Saved — the queue's job for this capture is done. Delete the row outright (never
+    // update to a "Saved" status): the transaction + its receipt_attachments are now
+    // Activity's record, not the queue's. Storage files are NOT touched here — they're
+    // now referenced by receipt_attachments.
+    await captureQueueRepository.remove(supabase, queueId);
+
+    revalidatePath("/activity");
+    revalidatePath("/");
   } catch (err) {
     console.error(`[inbox] processing failed for ${queueId}:`, err);
     // Re-fetch: retry_count may have changed since we first loaded the row (e.g. a
     // concurrent retry click), so increment off the latest known value, not a stale one.
     const latest = await captureQueueRepository.getById(supabase, queueId).catch(() => row);
     const nextRetryCount = (latest ?? row).retry_count + 1;
+    // SaveValidationError already carries a specific, user-actionable message (e.g. "No
+    // exchange rate on file for JPY...") — friendlyCaptureError only knows AI-side errors
+    // and would otherwise flatten it to a generic one.
+    const message = err instanceof SaveValidationError ? err.message : friendlyCaptureError(err);
     // The row may have been deleted mid-run — ignore update failures.
     await captureQueueRepository
-      .update(supabase, queueId, { status: "Failed", error_message: friendlyCaptureError(err), retry_count: nextRetryCount })
+      .update(supabase, queueId, { status: "Failed", error_message: message, retry_count: nextRetryCount })
       .catch(() => {});
   }
 }
@@ -141,19 +171,17 @@ export async function retryQueueItem(supabase: SupabaseClient, queueId: string):
 }
 
 /**
- * Removes the queue row. Storage files are removed too — UNLESS the capture was already
- * Saved, in which case the saved transaction's receipt_attachments rows reference those
- * same paths, so deleting them would corrupt the permanent record. Never touches
- * transaction_headers/transaction_items — deleting a queue record never deletes a
- * transaction.
+ * Removes the queue row and its Storage files. Only ever called on a Processing/Failed
+ * row — a successful capture's row is already gone by the time anyone could click Delete
+ * on it (see processQueueItem), so there is no "already Saved, keep the files" case to
+ * guard against here. Never touches transaction_headers/transaction_items — deleting a
+ * queue record never deletes a transaction.
  */
 export async function deleteQueueItem(supabase: SupabaseClient, queueId: string): Promise<void> {
   const row = await captureQueueRepository.getById(supabase, queueId);
   if (!row) return;
 
-  if (row.status !== "Saved") {
-    await receiptStorageRepository.removeReceiptPages(supabase, row.pages.map((p) => p.storagePath)).catch(() => {});
-  }
+  await receiptStorageRepository.removeReceiptPages(supabase, row.pages.map((p) => p.storagePath)).catch(() => {});
   await captureQueueRepository.remove(supabase, queueId);
 }
 
@@ -171,11 +199,9 @@ export type InboxItem = {
   firstPage: CaptureQueuePage | null;
   aiProvider: string | null;
   captureSource: string;
-  transactionHeaderId: string | null;
-  resultJson: CaptureReceiptResult | null;
 };
 
-/** All queue items (every status, including Saved — the Inbox displays all of them). */
+/** Every queue row — Processing (in flight) or Failed (waiting on retry). Nothing else lingers here. */
 export async function listInboxItems(supabase: SupabaseClient): Promise<InboxItem[]> {
   const rows = await captureQueueRepository.list(supabase);
 
@@ -192,8 +218,6 @@ export async function listInboxItems(supabase: SupabaseClient): Promise<InboxIte
     firstPage: row.pages[0] ?? null,
     aiProvider: row.ai_provider,
     captureSource: row.capture_source,
-    transactionHeaderId: row.transaction_header_id,
-    resultJson: row.status === "Ready for Review" ? (row.result_json as CaptureReceiptResult) : null,
   }));
 }
 

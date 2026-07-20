@@ -63,7 +63,16 @@ export async function getActivity(
     itemsByHeader.get(item.header_id)!.push(item);
   }
 
-  const transactions = headers.map((header): ActivityTransaction => {
+  // Newest first: by transaction date, then by save time for same-day transactions —
+  // matters now that auto-save (UX refresh Phase F) can insert several same-day
+  // transactions in one background run, where insertion order alone wouldn't reflect
+  // "most recently saved" the way it did when every save was a distinct manual action.
+  const sortedHeaders = [...headers].sort((a, b) => {
+    const byDate = b.transaction_date.localeCompare(a.transaction_date);
+    return byDate !== 0 ? byDate : b.created_at.localeCompare(a.created_at);
+  });
+
+  const transactions = sortedHeaders.map((header): ActivityTransaction => {
     const headerItems = itemsByHeader.get(header.id) ?? [];
 
     const activityItems: ActivityItem[] = headerItems.map((it) => ({
@@ -91,7 +100,7 @@ export async function getActivity(
     };
   });
 
-  return transactions.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+  return transactions;
 }
 
 export type RecentTransaction = {

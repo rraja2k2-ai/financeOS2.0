@@ -1,5 +1,13 @@
-/** Capture Inbox queue states — mutually exclusive (C5). Frozen schema: use only these 5 values. */
-export type CaptureQueueStatus = "Uploading" | "Processing" | "Ready for Review" | "Failed" | "Saved";
+/**
+ * Capture Inbox queue states (Fix 5.1 — the queue is a transient processing queue, not a
+ * history table). A row is either being worked on, or it failed and is waiting on retry
+ * — a successful save deletes the row immediately, so no terminal "done" state exists
+ * here. The underlying column's check constraint still technically permits "Uploading",
+ * "Ready for Review", and "Saved" (pre-existing values from before this cleanup) — the
+ * app no longer writes any of the three, so they're excluded from this type. See
+ * CLAUDE.md §5.
+ */
+export type CaptureQueueStatus = "Processing" | "Failed";
 
 /** How the receipt was supplied. "prompt" = context-only capture, no receipt attached. */
 export type CaptureSourceKind = "camera" | "upload" | "paste" | "prompt";

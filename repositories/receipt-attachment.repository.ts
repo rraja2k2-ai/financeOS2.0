@@ -70,3 +70,18 @@ export async function removeByHeaderId(supabase: SupabaseClient, headerId: strin
     throw error;
   }
 }
+
+/** A saved transaction's receipt pages, in page order — powers the Receipt Viewer. */
+export async function listByHeaderId(supabase: SupabaseClient, headerId: string): Promise<ReceiptAttachment[]> {
+  const { data, error } = await supabase
+    .from("receipt_attachments")
+    .select("*")
+    .eq("header_id", headerId)
+    .order("page_no", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}

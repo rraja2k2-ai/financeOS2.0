@@ -6,7 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- Activity line item metadata now shows `Qty | Category` (pipe separator, spaces on
+  both sides), replacing the previous `Qty Category` layout.
+- Line items with no unit of measure now display FinanceOS's standard default, `PC`
+  (e.g. `1 PC`), instead of a bare number. Weight/volume/other units that were actually
+  extracted (`0.26 kg`, `1 L`, `500 ml`, etc.) are unaffected — shown exactly as stored.
 
 ## [1.2.0] - 2026-07-19 - AI Capture Workflow
 

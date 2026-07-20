@@ -37,3 +37,9 @@ export async function removeReceiptPages(supabase: SupabaseClient, paths: string
   if (paths.length === 0) return;
   await supabase.storage.from(RECEIPTS_BUCKET).remove(paths);
 }
+
+/** A time-limited URL for a private-bucket file — the bucket has no public read access. */
+export async function getSignedUrl(supabase: SupabaseClient, path: string, expiresInSeconds = 3600): Promise<string | null> {
+  const { data } = await supabase.storage.from(RECEIPTS_BUCKET).createSignedUrl(path, expiresInSeconds);
+  return data?.signedUrl ?? null;
+}
