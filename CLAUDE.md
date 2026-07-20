@@ -182,8 +182,14 @@ Refresh Activity
    file, or text-only).
 2. **Capture Modal** — collects the receipt page(s) and free-text user
    context, shows real upload/processing progress (no simulated timers),
-   and stays open with a retry path on failure so an uploaded receipt is
-   never lost.
+   and **owns its own capture end-to-end**: it stays open through
+   uploading, queueing, and the background AI/Save run, polling the queue
+   row it just created. On success it navigates to Activity itself
+   (auto-expand + highlight, see §7); on failure — enqueue failure or a
+   background AI/Save failure — it stays open with the real error, a
+   Retry, a Delete, and an "Open Capture Inbox" escape hatch, so an
+   uploaded receipt is never lost and the user is never left not knowing
+   what happened.
 3. **Capture Inbox** (`capture_queue`) — an async work queue. A capture
    enqueues immediately (status `Processing`) and processes in the
    background; the user is never blocked waiting on the AI call.
@@ -278,21 +284,30 @@ reused for the whole session — no repeated queries mid-session.
 - **After a successful capture, the app navigates the user to Activity,
   auto-expands the new transaction, and highlights it for ~3 seconds**
   (then the highlight fades; the transaction stays expanded). Never opens
-  Edit or the Receipt Viewer directly — those stay behind `⋮`. A failed
-  capture's behavior is unchanged: no navigation, the Processing indicator
-  still opens Inbox, Retry still works. Detection is client-side polling
-  (`InboxIndicator`) comparing Processing-item IDs between polls, not a
-  lingering queue row — `capture_queue` never keeps a "Saved" row to look
-  up (§5), so a vanished-not-Failed ID is the only success signal available;
-  the newest transaction (`transaction_headers.created_at`) is then assumed
-  to be the one just created. This is a deliberate simplification for a
-  single-user app with normally one capture in flight at a time — do not
-  "fix" it by resurrecting a lingering Saved state.
+  Edit or the Receipt Viewer directly — those stay behind `⋮`. **The
+  Capture Modal owns this detection while it's open**: it polls its own
+  just-queued `capture_queue` row directly (`GET /api/inbox/[id]`) and
+  reacts the moment it either disappears (saved) or turns `Failed`,
+  rather than closing blind right after upload. A failed capture keeps
+  the Capture Modal open with the real error, Retry, Delete, and Open
+  Capture Inbox — Capture Inbox stays exception-handling only, never the
+  normal path. `InboxIndicator` (the global, always-mounted indicator) is
+  the fallback for the same signal whenever the Modal isn't open to see it
+  — same underlying logic: `capture_queue` never keeps a "Saved" row to
+  look up (§5), so a vanished-not-Failed ID is the only success signal
+  available; the newest transaction (`transaction_headers.created_at`) is
+  then assumed to be the one just created. This is a deliberate
+  simplification for a single-user app with normally one capture in
+  flight at a time — do not "fix" it by resurrecting a lingering Saved
+  state.
 - **Activity always sorts and groups by capture time**
   (`transaction_headers.created_at`), never by the receipt's own printed
   date — a receipt can carry any date the merchant printed on it, but "what
   did I just capture" is what keeps the feed coherent. The receipt's date is
-  display-only, surfaced solely inside Edit.
+  display-only, surfaced solely inside Edit. **Dashboard's Recent
+  Transactions card follows the same rule** — both its ordering and its
+  displayed date (`listRecent` in `transaction-header.repository.ts`) are
+  capture time, never the receipt's printed date.
 - Header-level actions on a transaction (edit, view receipt, delete) live
   behind a single `⋮` overflow menu in the transaction header — icon-only,
   no permanently visible action buttons, rendered through a portal so it's

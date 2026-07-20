@@ -27,8 +27,7 @@ export async function list(supabase: SupabaseClient): Promise<TransactionHeader[
 
 /** The single most recently CAPTURED header (transaction_headers.created_at) — used to
  *  find "the transaction a just-finished background capture became," never by the
- *  receipt's own printed date. Distinct from listRecent, which orders by transaction_date
- *  for the Dashboard's "Recent Activity" card — a different, unrelated concern. */
+ *  receipt's own printed date. */
 export async function getLatest(supabase: SupabaseClient): Promise<TransactionHeader | null> {
   const { data, error } = await supabase
     .from("transaction_headers")
@@ -44,12 +43,13 @@ export async function getLatest(supabase: SupabaseClient): Promise<TransactionHe
   return data;
 }
 
-/** Most recent `limit` headers by transaction_date, for a "Recent Activity" style view. */
+/** Most recent `limit` headers by CAPTURE time (transaction_headers.created_at), for the
+ *  Dashboard's "Recent Transactions" card — never by the receipt's own printed date. See
+ *  CLAUDE.md §7. */
 export async function listRecent(supabase: SupabaseClient, limit: number): Promise<TransactionHeader[]> {
   const { data, error } = await supabase
     .from("transaction_headers")
     .select("*")
-    .order("transaction_date", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(limit);
 

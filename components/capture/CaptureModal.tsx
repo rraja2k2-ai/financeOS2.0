@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { compressImageFile } from "@/components/capture/compress-image";
 
@@ -17,28 +18,35 @@ export type CaptureSubmission = {
 export type CaptureProgressPhase = "uploading" | "preparing";
 
 /**
- * Submits a capture to the queue. Resolves once the receipt is successfully queued in the
- * Capture Inbox; rejects with a friendly Error message on failure. `onPhase` is called on
- * real progress transitions (e.g. when the upload finishes) — never on a timer.
+ * Submits a capture to the queue. Resolves with the new queue row's id once the receipt
+ * is successfully queued in the Capture Inbox; rejects with a friendly Error message on
+ * failure. `onPhase` is called on real progress transitions (e.g. when the upload
+ * finishes) — never on a timer.
  */
-export type CaptureSubmitFn = (submission: CaptureSubmission, onPhase: (phase: CaptureProgressPhase) => void) => Promise<void>;
+export type CaptureSubmitFn = (
+  submission: CaptureSubmission,
+  onPhase: (phase: CaptureProgressPhase) => void
+) => Promise<{ id: string }>;
 
 /**
- * Premium Capture modal (Fix 1: smooth, continuous submit).
+ * Premium Capture modal (Fix 6.4A: the Capture screen owns the ENTIRE workflow).
  *
  * Full-screen overlay, NOT a page: it renders above whatever page the user is on. It
- * collects the receipt (pages) + user context, and on Capture & Process shows a
- * lightweight, event-driven processing state IN the modal (Uploading → Preparing →
- * Added). It only closes once the receipt has been successfully queued in the Capture
- * Inbox. On failure it stays open with a friendly error + Retry/Cancel, never losing the
- * uploaded receipt or the user context. The AI pipeline itself runs later in the
- * background — nothing about it lives here.
+ * collects the receipt (pages) + user context, then shows a real, event-driven progress
+ * state IN the modal all the way through: Uploading → Preparing → Processing receipt…
+ * It stays open and polls its own queued item until the background AI pipeline either
+ * succeeds (it then navigates to Activity itself, on the just-created transaction) or
+ * fails (it stays open with the real error, Retry, Delete, and Open Capture Inbox). It
+ * NEVER closes blind right after the upload — the user always learns the outcome.
  */
 
-// Brief on-screen confirmation of the successful queue before auto-closing. This is a
-// success acknowledgement, not a simulated processing delay — the receipt is already
-// queued at this point.
+// Brief on-screen confirmation of a finished step (queued / saved) before auto-advancing.
+// This is a success acknowledgement, not a simulated processing delay.
 const SUCCESS_HOLD_MS = 650;
+
+// How often the modal asks "is this capture done yet?" while its own item processes in
+// the background. Real polling of real state, not a simulated timer.
+const PROCESSING_POLL_MS = 2000;
 
 type ReceiptSource = "camera" | "upload" | "paste";
 
@@ -78,22 +86,34 @@ function phaseText(phase: CaptureProgressPhase): string {
 }
 
 export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: CaptureSubmitFn }) {
+  const router = useRouter();
   const [context, setContext] = useState("");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   /** A new receipt waiting for the user to confirm replacing the current one. */
   const [pendingReceipt, setPendingReceipt] = useState<Receipt | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Submission lifecycle (Fix 1).
+  // Submission lifecycle (Fix 6.4A): submitting stays true from "Uploading…" all the way
+  // through "Processing receipt…" — the modal doesn't hand off to the background until
+  // the capture is actually done.
   const [submitting, setSubmitting] = useState(false);
   const [succeeded, setSucceeded] = useState(false);
   const [statusText, setStatusText] = useState("Uploading receipt…");
+  // Hard failure to even enqueue the capture (network/validation) — the form stays
+  // editable and Retry re-submits fresh. Distinct from processingError below.
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // The queued item's own id, and the real error once its BACKGROUND processing (AI call
+  // or Save) fails — as opposed to submitError, which is a failure to queue at all.
+  const [queueId, setQueueId] = useState<string | null>(null);
+  const [processingError, setProcessingError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep latest state in refs so the unmount-only cleanup below can release object URLs
   // without re-running (and revoking live URLs) on every state change.
@@ -107,11 +127,14 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
       releasePages(receiptRef.current?.pages ?? []);
       releasePages(pendingRef.current?.pages ?? []);
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, []);
 
-  // Closing is blocked mid-submit / mid-success (the queue write is in flight or done and
-  // auto-closing) — the user can't accidentally abandon a capture partway through.
+  // Closing is blocked while queueing/processing/succeeding (Fix 6.4A: the screen must
+  // remain visible until Success or Failure) — the user can't accidentally abandon a
+  // capture partway through. Once processing has actually FAILED, closing is allowed
+  // again — the Failed row stays safely in the Capture Inbox for later.
   const isBusy = submitting || succeeded;
   const requestClose = useCallback(() => {
     if (isBusy) return;
@@ -240,9 +263,9 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   const canCapture = hasAttachments || context.trim().length > 0;
 
   /**
-   * Capture & Process: queue the capture, narrating real progress inside the modal. On
-   * success the modal briefly confirms and closes itself; on failure it stays open with
-   * the error and the user's receipt + context intact, ready to Retry.
+   * Capture & Process: queue the capture, narrating real progress inside the modal, then
+   * hand off to the polling effect below to track the SAME item's background processing
+   * — the modal stays open and showing "Processing receipt…" until that resolves.
    */
   async function handleCapture() {
     if (!canCapture || isBusy) return;
@@ -253,19 +276,121 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     };
 
     setSubmitError(null);
+    setProcessingError(null);
     setSubmitting(true);
     setStatusText(submission.files.length > 0 ? "Uploading receipt…" : "Preparing AI processing…");
 
     try {
-      await onSubmit(submission, (phase) => setStatusText(phaseText(phase)));
-      // Queued successfully — confirm briefly, then close automatically.
-      setSucceeded(true);
-      setStatusText("Receipt added to Capture Inbox");
-      closeTimerRef.current = setTimeout(() => onClose(), SUCCESS_HOLD_MS);
+      const { id } = await onSubmit(submission, (phase) => setStatusText(phaseText(phase)));
+      // Queued successfully — the polling effect takes over from here.
+      setStatusText("Processing receipt…");
+      setQueueId(id);
     } catch (err) {
       setSubmitting(false);
       setSubmitError(err instanceof Error ? err.message : "Couldn't add the capture to the Inbox. Please try again.");
     }
+  }
+
+  /**
+   * Polls the queued item's own status while it's being worked on in the background
+   * (Fix 6.4A). Runs whenever there's a queue id and we're not already past processing —
+   * this also covers "Retry", which just clears processingError and lets this effect
+   * pick the same item back up.
+   */
+  useEffect(() => {
+    if (!queueId || succeeded || processingError) return;
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const res = await fetch(`/api/inbox/${queueId}`, { cache: "no-store" });
+        const body = (await res.json().catch(() => null)) as { item?: { status: string; errorMessage: string | null } | null } | null;
+        if (cancelled) return;
+        const item = body?.item ?? null;
+
+        if (!item) {
+          // Gone — the queue never keeps a "Saved" row, so this means Save succeeded.
+          window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+          setStatusText("Transaction saved!");
+          setSucceeded(true);
+          const latest = await fetch("/api/transactions/latest", { cache: "no-store" })
+            .then((r) => r.json())
+            .catch(() => null);
+          if (cancelled) return;
+          closeTimerRef.current = setTimeout(() => {
+            onClose();
+            router.push(latest?.id ? `/activity?highlight=${latest.id}` : "/activity");
+          }, SUCCESS_HOLD_MS);
+          return;
+        }
+
+        if (item.status === "Failed") {
+          window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+          setSubmitting(false);
+          setProcessingError(item.errorMessage ?? "Processing failed. Please try again.");
+          return;
+        }
+
+        pollTimerRef.current = setTimeout(poll, PROCESSING_POLL_MS);
+      } catch {
+        // Network hiccup — keep trying rather than leaving the user stuck mid-processing.
+        if (!cancelled) pollTimerRef.current = setTimeout(poll, PROCESSING_POLL_MS);
+      }
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, [queueId, succeeded, processingError, onClose, router]);
+
+  /** Reruns the SAME queued item's background pipeline (no re-upload) — reuses the existing retry endpoint. */
+  async function handleRetryProcessing() {
+    if (!queueId || actionBusy) return;
+    setActionBusy(true);
+    try {
+      const res = await fetch(`/api/inbox/${queueId}/retry`, { method: "POST" });
+      const body = (await res.json().catch(() => null)) as { retried?: boolean; error?: string } | null;
+      if (!res.ok || !body?.retried) {
+        setProcessingError(body?.error ?? "Couldn't retry this capture. Please try again.");
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+      setSubmitting(true);
+      setStatusText("Processing receipt…");
+      setProcessingError(null);
+    } catch {
+      setProcessingError("Couldn't reach the server. Please try again.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  /** Discards the failed capture (queue row + its Storage pages) and closes the modal. */
+  async function handleDeleteFailedCapture() {
+    if (!queueId || actionBusy) return;
+    setActionBusy(true);
+    try {
+      const res = await fetch(`/api/inbox/${queueId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        setProcessingError(body?.error ?? "Couldn't delete this capture. Please try again.");
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+      onClose();
+    } catch {
+      setProcessingError("Couldn't reach the server. Please try again.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  /** Leaves the failed capture in the queue (exception handling, not the normal path) and opens the Inbox. */
+  function handleOpenInbox() {
+    onClose();
+    router.push("/inbox");
   }
 
   return (
@@ -289,6 +414,14 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
 
         {isBusy ? (
           <ProcessingView statusText={statusText} succeeded={succeeded} />
+        ) : processingError ? (
+          <ProcessingFailedView
+            message={processingError}
+            busy={actionBusy}
+            onRetry={handleRetryProcessing}
+            onDelete={handleDeleteFailedCapture}
+            onOpenInbox={handleOpenInbox}
+          />
         ) : (
           <>
             {/* AI context — the primary element */}
@@ -443,6 +576,67 @@ function ProcessingView({ statusText, succeeded }: { statusText: string; succeed
       )}
       <p className={cn("mt-4 text-[14.5px] font-semibold", succeeded && "text-primary")}>{statusText}</p>
       {!succeeded && <p className="mt-1 text-[12px] text-muted-foreground">This only takes a moment — hang tight.</p>}
+    </div>
+  );
+}
+
+/**
+ * Shown when the BACKGROUND processing of an already-queued capture fails (the AI call or
+ * the save itself threw) — as opposed to failing to queue at all (see submitError above).
+ * The receipt and context are safe in the Capture Inbox; this is exception handling, not
+ * the normal path (CLAUDE.md §5/§7).
+ */
+function ProcessingFailedView({
+  message,
+  busy,
+  onRetry,
+  onDelete,
+  onOpenInbox,
+}: {
+  message: string;
+  busy: boolean;
+  onRetry: () => void;
+  onDelete: () => void;
+  onOpenInbox: () => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center py-16 text-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-destructive/15 text-destructive">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+          <path d="M12 9v4M12 17h.01" />
+          <circle cx="12" cy="12" r="9" />
+        </svg>
+      </div>
+      <p className="mt-4 text-[14.5px] font-semibold text-destructive">Processing failed</p>
+      <p className="mt-1.5 max-w-[320px] text-[12.5px] leading-relaxed text-muted-foreground">{message}</p>
+      <p className="mt-1 text-[11.5px] text-muted-foreground">Your receipt is safe in the Capture Inbox.</p>
+
+      <div className="mt-6 flex w-full max-w-[320px] flex-col gap-2.5">
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={busy}
+          className="w-full rounded-[var(--radius-md)] bg-primary py-3 text-[14.5px] font-semibold text-primary-foreground disabled:opacity-50"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          onClick={onOpenInbox}
+          disabled={busy}
+          className="w-full rounded-[var(--radius-md)] border border-border py-3 text-[13.5px] font-semibold disabled:opacity-50"
+        >
+          Open Capture Inbox
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={busy}
+          className="w-full rounded-[var(--radius-md)] py-3 text-[13.5px] font-semibold text-destructive disabled:opacity-50"
+        >
+          {busy ? "Working…" : "Delete"}
+        </button>
+      </div>
     </div>
   );
 }

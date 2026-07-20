@@ -221,6 +221,20 @@ export async function listInboxItems(supabase: SupabaseClient): Promise<InboxIte
   }));
 }
 
+/** Display-ready status for ONE queue row — polled by the Capture screen (Fix 6.4A)
+ *  while its own just-submitted capture is processing, so it can stay open and react the
+ *  moment the item succeeds (row gone) or fails, instead of closing blind after upload. */
+export type InboxItemStatus = {
+  status: CaptureQueueStatus;
+  errorMessage: string | null;
+};
+
+export async function getInboxItemStatus(supabase: SupabaseClient, queueId: string): Promise<InboxItemStatus | null> {
+  const row = await captureQueueRepository.getById(supabase, queueId);
+  if (!row) return null;
+  return { status: row.status, errorMessage: row.status === "Failed" ? row.error_message : null };
+}
+
 async function downloadQueuePages(supabase: SupabaseClient, pages: CaptureQueuePage[]): Promise<CaptureDocumentPage[]> {
   const result: CaptureDocumentPage[] = [];
   for (const page of [...pages].sort((a, b) => a.pageNo - b.pageNo)) {

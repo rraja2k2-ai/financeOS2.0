@@ -107,7 +107,9 @@ export async function getActivity(
 export type RecentTransaction = {
   id: string;
   merchant: string | null;
-  transactionDate: string;
+  /** Calendar day the transaction was captured/saved (transaction_headers.created_at) —
+   *  never the receipt's own printed date. See CLAUDE.md §7. */
+  capturedDate: string;
   primaryCategory: string | null;
   currency: string;
   originalAmount: number;
@@ -115,14 +117,15 @@ export type RecentTransaction = {
   currencyGroup: "SGD" | "INR";
 };
 
-/** Lightweight header-only feed for the Dashboard's Recent Transactions card — no items fetch. */
+/** Lightweight header-only feed for the Dashboard's Recent Transactions card — no items fetch.
+ *  Ordered by capture time (listRecent), never the receipt's own printed date. */
 export async function getRecentTransactions(supabase: SupabaseClient, limit: number): Promise<RecentTransaction[]> {
   const headers = await transactionHeaderRepository.listRecent(supabase, limit);
 
   return headers.map((header) => ({
     id: header.id,
     merchant: header.merchant,
-    transactionDate: header.transaction_date,
+    capturedDate: header.created_at.slice(0, 10),
     primaryCategory: header.primary_category,
     currency: header.currency,
     originalAmount: Number(header.original_amount),

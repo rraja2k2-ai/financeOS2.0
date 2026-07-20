@@ -4,22 +4,24 @@ import { useState } from "react";
 import { CaptureModal, type CaptureSubmitFn } from "@/components/capture/CaptureModal";
 
 /**
- * Hosts the capture entry point (Fix 1 — smooth async submit):
+ * Hosts the capture entry point (Fix 6.4A — Capture screen owns the whole workflow):
  *
  *   "+" FAB → CaptureModal (collects input, then shows an in-modal processing state)
  *     → the capture is enqueued (POST /api/inbox: pages upload + queue row)
- *     → on success the modal confirms and closes itself; the user returns to their page
- *     → the AI pipeline runs in the BACKGROUND (server-side); results land in the Inbox.
+ *     → the modal STAYS OPEN and polls the queue row itself, showing "Processing receipt…"
+ *       while the AI pipeline runs in the BACKGROUND (server-side) — the user never
+ *       leaves not knowing whether it worked.
+ *     → on success the modal navigates to Activity itself; on failure it stays open with
+ *       the real error, Retry, Delete, and "Open Capture Inbox".
  *
- * The modal now stays open until the receipt is successfully queued (or fails), so the
- * transition feels continuous. The upload is sent via XMLHttpRequest purely so we can
- * report the REAL "upload finished → preparing" transition to the modal (fetch can't).
+ * The upload is sent via XMLHttpRequest purely so we can report the REAL "upload
+ * finished → preparing" transition to the modal (fetch can't).
  */
 export function CaptureLauncher() {
   const [captureOpen, setCaptureOpen] = useState(false);
 
   const handleSubmit: CaptureSubmitFn = (submission, onPhase) =>
-    new Promise<void>((resolve, reject) => {
+    new Promise<{ id: string }>((resolve, reject) => {
       const form = new FormData();
       form.set("context", submission.context);
       form.set("source", submission.source);
@@ -49,9 +51,10 @@ export function CaptureLauncher() {
           body = null;
         }
         if (xhr.status >= 200 && xhr.status < 300 && body?.id) {
-          // Successfully queued — nudge the global indicator to update immediately.
+          // Successfully queued — nudge the global indicator to update immediately, and
+          // hand the id back so the modal can poll THIS item's own processing status.
           window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
-          resolve();
+          resolve({ id: body.id });
         } else {
           reject(new Error(body?.error ?? "Couldn't add the capture to the Inbox. Please try again."));
         }
