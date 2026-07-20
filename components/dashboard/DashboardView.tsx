@@ -186,7 +186,7 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13.5px] font-semibold">{t.merchant || "Unknown merchant"}</p>
                   <p className="truncate text-[11.5px] text-muted-foreground">
-                    {t.primaryCategory || "Uncategorized"} · {formatShortDate(t.transactionDate)}
+                    {t.primaryCategory || "Uncategorized"} · {formatShortDate(t.capturedDate)}
                   </p>
                 </div>
                 <div className={cn("flex-none text-right", hidden && "blur-sm select-none")}>

@@ -1,6 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase";
-import { deleteQueueItem } from "@/services/capture/inbox.service";
+import { deleteQueueItem, getInboxItemStatus } from "@/services/capture/inbox.service";
+
+/**
+ * Polled by the Capture screen (Fix 6.4A) while a just-submitted receipt is still
+ * processing — the screen stays open asking "is this one done yet?" instead of closing
+ * blind right after upload. `item: null` means the row is gone, which only ever happens
+ * once Save has succeeded (capture_queue never keeps a "Saved" row — see CLAUDE.md §5).
+ */
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  try {
+    const supabase = await createServerSupabaseClient();
+    const item = await getInboxItemStatus(supabase, id);
+    return NextResponse.json({ item });
+  } catch (err) {
+    console.error("[inbox] status check failed:", err);
+    return NextResponse.json({ error: "Couldn't check capture status." }, { status: 500 });
+  }
+}
 
 /**
  * Deletes a queued capture's row (and its Storage files, unless already Saved — those
