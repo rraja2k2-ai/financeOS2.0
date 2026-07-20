@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { compressImageFile } from "@/components/capture/compress-image";
 
 /** What the modal hands to its host when the user presses Capture & Process. */
 export type CaptureSubmission = {
@@ -152,10 +153,21 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     }
   }
 
-  function handleCameraFiles(files: FileList | null) {
-    const file = files?.[0];
-    if (!file) return;
-    setNotice(null);
+  // Downscaling a phone photo is fast (well under a second) but not instant — a brief
+  // notice avoids the button appearing to do nothing while it runs.
+  async function withCompressionNotice<T>(work: () => Promise<T>): Promise<T> {
+    setNotice("Optimizing photo…");
+    try {
+      return await work();
+    } finally {
+      setNotice(null);
+    }
+  }
+
+  async function handleCameraFiles(files: FileList | null) {
+    const rawFile = files?.[0];
+    if (!rawFile) return;
+    const file = await withCompressionNotice(() => compressImageFile(rawFile));
     // One receipt, many pages: keep appending pages while the camera is the source.
     if (receipt && receipt.source === "camera") {
       setReceipt({ ...receipt, pages: [...receipt.pages, toPage(file)] });
@@ -164,13 +176,14 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     }
   }
 
-  function handleUploadFile(files: FileList | null) {
-    const file = files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+  async function handleUploadFile(files: FileList | null) {
+    const rawFile = files?.[0];
+    if (!rawFile) return;
+    if (!rawFile.type.startsWith("image/") && rawFile.type !== "application/pdf") {
       setNotice("Upload one image or one PDF.");
       return;
     }
+    const file = await withCompressionNotice(() => compressImageFile(rawFile));
     installReceipt({ source: "upload", pages: [toPage(file)] });
   }
 
@@ -183,7 +196,8 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
           const imageType = item.types.find((t) => t.startsWith("image/"));
           if (imageType) {
             const blob = await item.getType(imageType);
-            const file = new File([blob], `pasted.${imageType.split("/")[1] ?? "png"}`, { type: imageType });
+            const rawFile = new File([blob], `pasted.${imageType.split("/")[1] ?? "png"}`, { type: imageType });
+            const file = await withCompressionNotice(() => compressImageFile(rawFile));
             installReceipt({ source: "paste", pages: [toPage(file)] });
             return;
           }
