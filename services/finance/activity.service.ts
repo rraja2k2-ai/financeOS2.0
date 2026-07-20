@@ -31,7 +31,10 @@ export type ActivityTransaction = {
   id: string;
   receiptId: string;
   merchant: string | null;
+  /** The receipt's own printed date — display only, inside Edit. Never used for Activity's sorting/grouping/filtering (see capturedDate). */
   transactionDate: string;
+  /** Calendar day the transaction was captured/saved (transaction_headers.created_at), local to this list's date-grouping and period filter — see CLAUDE.md §7. */
+  capturedDate: string;
   currency: string;
   originalAmount: number;
   sgdAmount: number;
@@ -63,14 +66,11 @@ export async function getActivity(
     itemsByHeader.get(item.header_id)!.push(item);
   }
 
-  // Newest first: by transaction date, then by save time for same-day transactions —
-  // matters now that auto-save (UX refresh Phase F) can insert several same-day
-  // transactions in one background run, where insertion order alone wouldn't reflect
-  // "most recently saved" the way it did when every save was a distinct manual action.
-  const sortedHeaders = [...headers].sort((a, b) => {
-    const byDate = b.transaction_date.localeCompare(a.transaction_date);
-    return byDate !== 0 ? byDate : b.created_at.localeCompare(a.created_at);
-  });
+  // Activity always sorts by capture time (transaction_headers.created_at), never by
+  // the receipt's own printed date — a receipt can carry any date the merchant printed
+  // on it, but "what did I just capture" is what makes the newest-first feed coherent.
+  // See CLAUDE.md §7.
+  const sortedHeaders = [...headers].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   const transactions = sortedHeaders.map((header): ActivityTransaction => {
     const headerItems = itemsByHeader.get(header.id) ?? [];
@@ -90,6 +90,7 @@ export async function getActivity(
       receiptId: header.receipt_id,
       merchant: header.merchant,
       transactionDate: header.transaction_date,
+      capturedDate: header.created_at.slice(0, 10),
       currency: header.currency,
       originalAmount: Number(header.original_amount),
       sgdAmount: Number(header.sgd_total_amount),

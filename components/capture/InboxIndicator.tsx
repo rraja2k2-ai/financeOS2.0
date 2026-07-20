@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 /**
  * The ONE small global Capture Inbox indicator (C5). Lives in the app shell, visible
@@ -15,30 +15,61 @@ import { usePathname } from "next/navigation";
  * dropped) and broadcast the SAME `financeos:inbox-changed` event already used for
  * enqueue/retry/delete — Activity (and anything else) listens for that one event rather
  * than each page polling its own queue-status endpoint.
+ *
+ * Post-capture navigation (UX improvement): a capture_queue row that was Processing and
+ * is now gone entirely (not moved to Failed) succeeded — the queue never keeps a "Saved"
+ * row (CLAUDE.md §5), so this is the only client-observable signal of success. On that
+ * signal, look up the newest transaction and navigate there so the user lands directly
+ * on what they just captured. Tracked by ID, not just a count, so an unrelated delete of
+ * an already-Failed item (which only changes the total, never the Processing set) can
+ * never be mistaken for a successful capture.
  */
 
 const POLL_MS = 7000;
 
 export function InboxIndicator() {
   const pathname = usePathname();
+  const router = useRouter();
   const [processingCount, setProcessingCount] = useState(0);
-  const prevCountRef = useRef(0);
+  const prevProcessingIdsRef = useRef<Set<string>>(new Set());
+  // The interval tick and the "financeos:inbox-changed" listener can both call refresh()
+  // close together (e.g. right after enqueue). Without this guard, two overlapping calls
+  // can both read prevProcessingIdsRef before either writes it back, double-detecting the
+  // same success and pushing the same navigation twice.
+  const isRefreshingRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
     try {
       const res = await fetch("/api/inbox", { cache: "no-store" });
-      const body = (await res.json().catch(() => null)) as { items?: { status: string }[] } | null;
+      const body = (await res.json().catch(() => null)) as { items?: { id: string; status: string }[] } | null;
       const items = body?.items ?? [];
-      const count = items.filter((i) => i.status === "Processing").length;
-      if (count < prevCountRef.current) {
+      const currentProcessingIds = new Set(items.filter((i) => i.status === "Processing").map((i) => i.id));
+      const currentAllIds = new Set(items.map((i) => i.id));
+
+      const succeededIds = [...prevProcessingIdsRef.current].filter((id) => !currentAllIds.has(id));
+      const anyFinished = currentProcessingIds.size < prevProcessingIdsRef.current.size;
+
+      prevProcessingIdsRef.current = currentProcessingIds;
+      setProcessingCount(currentProcessingIds.size);
+
+      if (anyFinished) {
         window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
       }
-      prevCountRef.current = count;
-      setProcessingCount(count);
+
+      if (succeededIds.length > 0) {
+        const latest = await fetch("/api/transactions/latest", { cache: "no-store" })
+          .then((r) => r.json())
+          .catch(() => null);
+        if (latest?.id) router.push(`/activity?highlight=${latest.id}`);
+      }
     } catch {
-      // Network hiccup — keep the previous count; next poll will correct it.
+      // Network hiccup — keep the previous state; next poll will correct it.
+    } finally {
+      isRefreshingRef.current = false;
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     refresh();

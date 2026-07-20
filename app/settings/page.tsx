@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 const SETTINGS_ITEMS = [
+  { href: "/settings/appearance", label: "Appearance", description: "System, Dark, or Light theme" },
   { href: "/settings/general", label: "General", description: "Base currency" },
   { href: "/settings/exchange-rates", label: "Exchange Rates", description: "Manage conversion rates" },
   { href: "/settings/categories", label: "Categories", description: "Categorization taxonomy" },

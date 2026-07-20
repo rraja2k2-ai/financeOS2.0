@@ -1,7 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import {
+  Banknote,
+  BadgePercent,
+  Building2,
+  Car,
+  Clapperboard,
+  GraduationCap,
+  HandCoins,
+  HeartHandshake,
+  HeartPulse,
+  Home,
+  Lightbulb,
+  Package,
+  PiggyBank,
+  Receipt as ReceiptIcon,
+  ShieldCheck,
+  ShoppingBag,
+  ShoppingBasket,
+  TrendingUp,
+  UtensilsCrossed,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
 import { computeCategorySpendFromTransactions } from "@/services/finance/activity.service";
@@ -12,6 +35,32 @@ import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
 import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
 import type { ReviewedCapture } from "@/services/capture/save-capture.service";
+
+/** Icon per primary category (constants/categories.ts) — presentation only, falls back to a generic receipt for anything unmapped. */
+const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  "Cashback & Rewards": BadgePercent,
+  "Interest Income": PiggyBank,
+  Investments: TrendingUp,
+  "Rental Income": Building2,
+  Salary: Banknote,
+  Education: GraduationCap,
+  "Family Support": HeartHandshake,
+  "Food & Dining": UtensilsCrossed,
+  Groceries: ShoppingBasket,
+  Healthcare: HeartPulse,
+  Housing: Home,
+  "Housing & Utilities": Lightbulb,
+  Insurance: ShieldCheck,
+  "Leisure & Entertainment": Clapperboard,
+  Lending: HandCoins,
+  Miscellaneous: Package,
+  Shopping: ShoppingBag,
+  Transportation: Car,
+};
+
+function categoryIcon(primary: string | null): LucideIcon {
+  return (primary && CATEGORY_ICONS[primary]) || ReceiptIcon;
+}
 
 export type ActivityViewProps = {
   transactions: ActivityTransaction[];
@@ -80,6 +129,9 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   const [group, setGroup] = useState<"SGD" | "INR">(highlightedTxn?.currencyGroup ?? "SGD");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<string | null>(highlightId ?? null);
+  // The visual highlight fades after ~3s; the transaction stays expanded. Separate from
+  // `expanded` itself so re-collapsing never happens automatically — only the emphasis does.
+  const [highlightActive, setHighlightActive] = useState(!!highlightId);
 
   // Edit & Delete (Fix 3) — the transaction header's own actions, not the line items'.
   const [editLoadingId, setEditLoadingId] = useState<string | null>(null);
@@ -89,16 +141,48 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   const [actionError, setActionError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Header overflow menu (UX refresh Phase C) + Receipt Viewer (Phase D).
-  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  // Header overflow menu (UX refresh Phase C) + Receipt Viewer (Phase D). The menu
+  // renders through a portal (Fix 5.3) so it's never clipped by the transaction card's
+  // overflow-hidden — position is computed from the trigger button's own rect, not CSS.
+  const [menuAnchor, setMenuAnchor] = useState<{ id: string; rect: DOMRect } | null>(null);
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
   const [viewingReceipt, setViewingReceipt] = useState<ReceiptViewerPage[] | null>(null);
 
+  // A floating, position-computed menu goes stale if the page scrolls or resizes under
+  // it — simplest correct behavior is to just close it rather than re-track position.
+  useEffect(() => {
+    if (!menuAnchor) return;
+    function close() {
+      setMenuAnchor(null);
+    }
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuAnchor]);
+
+  // Re-runs on every highlightId change, not just the initial mount — required for the
+  // post-capture flow, where a background capture can navigate here (?highlight=<id>)
+  // while ActivityView is already mounted (the user was already on this page). Widens
+  // period/group again each time for the same reason the initial state does: the newly
+  // highlighted transaction may fall outside whatever the user currently has selected.
   useEffect(() => {
     if (!highlightId) return;
-    const el = document.getElementById(`txn-${highlightId}`);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [highlightId]);
+    const txn = transactions.find((t) => t.id === highlightId);
+    if (txn) {
+      setPeriod("last6");
+      setGroup(txn.currencyGroup);
+    }
+    setExpanded(highlightId);
+    setHighlightActive(true);
+    requestAnimationFrame(() => {
+      document.getElementById(`txn-${highlightId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const timer = setTimeout(() => setHighlightActive(false), 3000);
+    return () => clearTimeout(timer);
+  }, [highlightId, transactions]);
 
   useEffect(() => {
     if (!toast) return;
@@ -218,7 +302,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   const { start: periodStart, end: periodEnd } = resolvePeriodRange(period, customStart, customEnd);
 
   const inPeriod = useMemo(
-    () => transactions.filter((t) => t.transactionDate >= periodStart && t.transactionDate <= periodEnd),
+    () => transactions.filter((t) => t.capturedDate >= periodStart && t.capturedDate <= periodEnd),
     [transactions, periodStart, periodEnd]
   );
 
@@ -240,7 +324,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   type MatchedItem = ActivityTransaction["items"][number] & {
     txnId: string;
     merchant: string | null;
-    transactionDate: string;
+    capturedDate: string;
     currency: string;
   };
 
@@ -255,7 +339,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
           (item.secondaryCategory ?? "").toLowerCase().includes(q) ||
           (t.merchant ?? "").toLowerCase().includes(q);
         if (hit) {
-          results.push({ ...item, txnId: t.id, merchant: t.merchant, transactionDate: t.transactionDate, currency: t.currency });
+          results.push({ ...item, txnId: t.id, merchant: t.merchant, capturedDate: t.capturedDate, currency: t.currency });
         }
       }
     }
@@ -267,17 +351,19 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   const matchedByDate = useMemo(() => {
     const map = new Map<string, MatchedItem[]>();
     for (const i of matchedItems) {
-      if (!map.has(i.transactionDate)) map.set(i.transactionDate, []);
-      map.get(i.transactionDate)!.push(i);
+      if (!map.has(i.capturedDate)) map.set(i.capturedDate, []);
+      map.get(i.capturedDate)!.push(i);
     }
     return Array.from(map.entries());
   }, [matchedItems]);
 
+  // groupTxns is already sorted newest-captured-first (activity.service.ts), so the
+  // Map's insertion order — and therefore this date grouping — stays newest first too.
   const byDate = useMemo(() => {
     const map = new Map<string, ActivityTransaction[]>();
     for (const t of groupTxns) {
-      if (!map.has(t.transactionDate)) map.set(t.transactionDate, []);
-      map.get(t.transactionDate)!.push(t);
+      if (!map.has(t.capturedDate)) map.set(t.capturedDate, []);
+      map.get(t.capturedDate)!.push(t);
     }
     return Array.from(map.entries());
   }, [groupTxns]);
@@ -288,7 +374,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
       : { "this-month": "This month", last3: "Last 3 months", last6: "Last 6 months" }[period];
 
   return (
-    <div className="px-5 pt-6" onClick={() => setMenuOpenId(null)}>
+    <div className="px-5 pt-6" onClick={() => setMenuAnchor(null)}>
       <h1 className="mb-4 text-[22px] font-bold tracking-tight">Activity</h1>
 
       <PeriodSelector
@@ -381,11 +467,14 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
                       )}
                     >
                       <div className="min-w-0 flex-1">
-                        <p className="font-semibold">{highlight(item.description, q)}</p>
+                        <p className="font-semibold text-foreground">{highlight(item.description, q)}</p>
                         <p className="mt-0.5 text-[10.5px] text-muted-foreground">{highlight(item.merchant, q)}</p>
-                        <p className="mt-0.5 text-[10.5px] text-muted-foreground">
-                          {formatQty(item.qty) ? `${formatQty(item.qty)} | ` : ""}
-                          {highlight(categoryPath(item.primaryCategory, item.secondaryCategory), q)}
+                        <p className="mt-0.5 text-[10.5px]">
+                          {formatQty(item.qty) && <span className="font-medium text-primary">{formatQty(item.qty)} </span>}
+                          <span className="text-muted-foreground">
+                            {formatQty(item.qty) ? "| " : ""}
+                            {highlight(categoryPath(item.primaryCategory, item.secondaryCategory), q)}
+                          </span>
                         </p>
                       </div>
                       <span className="flex-none text-right font-mono font-semibold tabular-nums">
@@ -410,23 +499,27 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
             </p>
             {txns.map((t) => {
               const isOpen = expanded === t.id;
+              const Icon = categoryIcon(t.primaryCategory);
               return (
                 <div
                   key={t.id}
                   id={`txn-${t.id}`}
                   className={cn(
-                    "mb-2 overflow-hidden rounded-[var(--radius-md)] border bg-card",
-                    t.id === highlightId ? "border-primary" : "border-border"
+                    "mb-2 overflow-hidden rounded-[var(--radius-md)] border bg-card shadow-sm transition-colors duration-700",
+                    t.id === highlightId && highlightActive ? "border-primary" : "border-border"
                   )}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="relative">
+                  {/* Header — dominant: stronger background, bolder than the supporting items below. */}
+                  <div className="relative bg-secondary/70">
                     <button
                       className="flex w-full items-center gap-3 p-3 pr-11"
                       onClick={() => setExpanded(isOpen ? null : t.id)}
                       aria-expanded={isOpen}
                     >
-                      <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-secondary text-[15px]">🧾</div>
+                      <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-primary/15 text-primary">
+                        <Icon size={18} strokeWidth={2} />
+                      </div>
                       <div className="min-w-0 flex-1 text-left">
                         <p className="truncate text-[13.5px] font-semibold">{highlight(t.merchant, q)}</p>
                         <p className="truncate text-[11.5px] text-muted-foreground">
@@ -453,82 +546,50 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
                     </button>
 
                     {/* Header-level actions — a single overflow menu, top-right of the transaction header. */}
-                    <div className="absolute right-2 top-2 z-10">
-                      <button
-                        type="button"
-                        aria-label="Transaction actions"
-                        title="Transaction actions"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMenuOpenId(menuOpenId === t.id ? null : t.id);
-                        }}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground"
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                          <circle cx="12" cy="5" r="1.8" />
-                          <circle cx="12" cy="12" r="1.8" />
-                          <circle cx="12" cy="19" r="1.8" />
-                        </svg>
-                      </button>
-                      {menuOpenId === t.id && (
-                        <div className="absolute right-0 top-8 z-20 w-44 overflow-hidden rounded-[var(--radius-md)] border border-border bg-card shadow-lg">
-                          <button
-                            type="button"
-                            disabled={editLoadingId === t.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setMenuOpenId(null);
-                              handleEdit(t.id);
-                            }}
-                            className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
-                          >
-                            {editLoadingId === t.id ? "Loading…" : "Edit"}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={receiptLoadingId === t.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setMenuOpenId(null);
-                              handleViewReceipt(t.id);
-                            }}
-                            className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
-                          >
-                            {receiptLoadingId === t.id ? "Loading…" : "View Receipt"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setMenuOpenId(null);
-                              setActionError(null);
-                              setConfirmingDeleteId(t.id);
-                            }}
-                            className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold text-destructive"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      aria-label="Transaction actions"
+                      title="Transaction actions"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (menuAnchor?.id === t.id) {
+                          setMenuAnchor(null);
+                          return;
+                        }
+                        setMenuAnchor({ id: t.id, rect: e.currentTarget.getBoundingClientRect() });
+                      }}
+                      className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.8" />
+                        <circle cx="12" cy="12" r="1.8" />
+                        <circle cx="12" cy="19" r="1.8" />
+                      </svg>
+                    </button>
                   </div>
 
+                  {/* Expanded items — a supporting timeline, not a nested card: single shared
+                      background, thin dividers, and a vertical accent line tying the rows together. */}
                   {isOpen && (
-                    <div className="border-t border-border bg-secondary p-2">
-                      <div className="overflow-hidden rounded-[var(--radius-md)] border border-border/70 bg-card">
+                    <div className="border-t border-border">
+                      <div className="relative pl-4">
+                        <div className="absolute bottom-0 left-[15px] top-0 w-px bg-primary/25" aria-hidden="true" />
                         {t.items.map((item, i) => (
-                          <div
-                            key={item.id}
-                            className={cn("flex items-start justify-between gap-3 px-3 py-2.5 text-[12px]", i > 0 && "border-t border-border")}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <p className="font-semibold">{highlight(item.description, q)}</p>
-                              <p className="mt-0.5 text-[10.5px] text-muted-foreground">
-                                {formatQty(item.qty) ? `${formatQty(item.qty)} | ` : ""}
-                                {categoryPath(item.primaryCategory, item.secondaryCategory)}
-                              </p>
+                          <div key={item.id} className={cn("relative py-2.5 pr-3", i > 0 && "border-t border-border/60")}>
+                            <span className="absolute left-[-8.5px] top-[15px] h-[7px] w-[7px] rounded-full bg-primary" aria-hidden="true" />
+                            <div className="flex items-start justify-between gap-3 text-[12px]">
+                              <div className="min-w-0 flex-1">
+                                <p className="font-semibold text-foreground">{highlight(item.description, q)}</p>
+                                <p className="mt-0.5 text-[10.5px]">
+                                  {formatQty(item.qty) && <span className="font-medium text-primary">{formatQty(item.qty)} </span>}
+                                  <span className="text-muted-foreground">
+                                    {formatQty(item.qty) ? "| " : ""}
+                                    {categoryPath(item.primaryCategory, item.secondaryCategory)}
+                                  </span>
+                                </p>
+                              </div>
+                              <span className="flex-none text-right font-mono font-semibold tabular-nums">{fmt(item.itemTotal)}</span>
                             </div>
-                            <span className="flex-none text-right font-mono font-semibold tabular-nums">{fmt(item.itemTotal)}</span>
                           </div>
                         ))}
                       </div>
@@ -542,6 +603,56 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
       )}
 
       {actionError && <p className="mt-3 text-[12px] font-semibold text-destructive">{actionError}</p>}
+
+      {/* Header overflow menu — rendered through a portal so a short card (one line item,
+          or none) can never clip it via the card's own overflow-hidden. Position is the
+          trigger button's own rect, not a CSS-relative offset. */}
+      {menuAnchor &&
+        createPortal(
+          <div
+            className="fixed z-[85] w-44 overflow-hidden rounded-[var(--radius-md)] border border-border bg-card shadow-lg"
+            style={{ top: menuAnchor.rect.bottom + 4, left: Math.max(8, menuAnchor.rect.right - 176) }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              disabled={editLoadingId === menuAnchor.id}
+              onClick={() => {
+                const id = menuAnchor.id;
+                setMenuAnchor(null);
+                handleEdit(id);
+              }}
+              className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
+            >
+              {editLoadingId === menuAnchor.id ? "Loading…" : "Edit"}
+            </button>
+            <button
+              type="button"
+              disabled={receiptLoadingId === menuAnchor.id}
+              onClick={() => {
+                const id = menuAnchor.id;
+                setMenuAnchor(null);
+                handleViewReceipt(id);
+              }}
+              className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
+            >
+              {receiptLoadingId === menuAnchor.id ? "Loading…" : "View Receipt"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const id = menuAnchor.id;
+                setMenuAnchor(null);
+                setActionError(null);
+                setConfirmingDeleteId(id);
+              }}
+              className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold text-destructive"
+            >
+              Delete
+            </button>
+          </div>,
+          document.body
+        )}
 
       {/* Edit — the SAME Review screen used by Capture, populated from the saved transaction. Save UPDATEs it, never creates a new one. */}
       {editing && (

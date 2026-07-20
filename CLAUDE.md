@@ -40,6 +40,9 @@ project, and monitor accounts and investments.
 - Next.js (App Router, Turbopack), React, TypeScript.
 - Tailwind CSS for styling. No component library beyond small in-house
   primitives (`components/`).
+- Lucide (`lucide-react`) for icons — e.g. category icons in Activity, mapped
+  by primary category name with a generic fallback for anything unmapped.
+  No other icon library.
 
 **Backend**
 - Next.js Server Components and Route Handlers (`app/api/**`). No separate
@@ -272,9 +275,35 @@ reused for the whole session — no repeated queries mid-session.
   parallel transaction list. Activity refreshes itself automatically when a
   background capture finishes, newest transaction first — the user is never
   required to manually reload to see it.
+- **After a successful capture, the app navigates the user to Activity,
+  auto-expands the new transaction, and highlights it for ~3 seconds**
+  (then the highlight fades; the transaction stays expanded). Never opens
+  Edit or the Receipt Viewer directly — those stay behind `⋮`. A failed
+  capture's behavior is unchanged: no navigation, the Processing indicator
+  still opens Inbox, Retry still works. Detection is client-side polling
+  (`InboxIndicator`) comparing Processing-item IDs between polls, not a
+  lingering queue row — `capture_queue` never keeps a "Saved" row to look
+  up (§5), so a vanished-not-Failed ID is the only success signal available;
+  the newest transaction (`transaction_headers.created_at`) is then assumed
+  to be the one just created. This is a deliberate simplification for a
+  single-user app with normally one capture in flight at a time — do not
+  "fix" it by resurrecting a lingering Saved state.
+- **Activity always sorts and groups by capture time**
+  (`transaction_headers.created_at`), never by the receipt's own printed
+  date — a receipt can carry any date the merchant printed on it, but "what
+  did I just capture" is what keeps the feed coherent. The receipt's date is
+  display-only, surfaced solely inside Edit.
 - Header-level actions on a transaction (edit, view receipt, delete) live
   behind a single `⋮` overflow menu in the transaction header — icon-only,
-  no permanently visible action buttons.
+  no permanently visible action buttons, rendered through a portal so it's
+  never clipped by the transaction card's own bounds.
+- **Theme (Settings → Appearance) is System / Dark / Light**, default
+  **Dark** when nothing has been chosen yet. It's a per-device rendering
+  preference stored in `localStorage` only (`lib/theme.ts`) — never in the
+  database — applied via a pre-paint `<head>` script (no flash of the wrong
+  theme) and kept live-consistent with OS changes by a small mounted-once
+  component (`ThemeSync`). One mechanism for the whole app; do not add a
+  second theme store or a per-page override.
 
 ---
 
