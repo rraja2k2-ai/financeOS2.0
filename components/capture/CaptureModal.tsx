@@ -296,6 +296,11 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
    * (Fix 6.4A). Runs whenever there's a queue id and we're not already past processing —
    * this also covers "Retry", which just clears processingError and lets this effect
    * pick the same item back up.
+   *
+   * Fix 6.4.4: success is `transactionHeaderId` being set on THIS item — the exact id
+   * processQueueItem's Save step just created — never a "latest transaction" guess. That
+   * makes the success branch a single synchronous step (no async gap after setSucceeded),
+   * so there's nothing left to race against the effect's own cleanup.
    */
   useEffect(() => {
     if (!queueId || succeeded || processingError) return;
@@ -304,30 +309,38 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     async function poll() {
       try {
         const res = await fetch(`/api/inbox/${queueId}`, { cache: "no-store" });
-        const body = (await res.json().catch(() => null)) as { item?: { status: string; errorMessage: string | null } | null } | null;
+        const body = (await res.json().catch(() => null)) as
+          | { item?: { status: string; errorMessage: string | null; transactionHeaderId: string | null } | null }
+          | null;
         if (cancelled) return;
         const item = body?.item ?? null;
 
-        if (!item) {
-          // Gone — the queue never keeps a "Saved" row, so this means Save succeeded.
+        if (item?.transactionHeaderId) {
+          const headerId = item.transactionHeaderId;
           window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+          fetch(`/api/inbox/${queueId}/consume`, { method: "POST" }).catch(() => {});
           setStatusText("Transaction saved!");
           setSucceeded(true);
-          const latest = await fetch("/api/transactions/latest", { cache: "no-store" })
-            .then((r) => r.json())
-            .catch(() => null);
-          if (cancelled) return;
           closeTimerRef.current = setTimeout(() => {
             onClose();
-            router.push(latest?.id ? `/activity?highlight=${latest.id}` : "/activity");
+            router.push(`/activity?highlight=${headerId}`);
           }, SUCCESS_HOLD_MS);
           return;
         }
 
-        if (item.status === "Failed") {
+        if (item?.status === "Failed") {
           window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
           setSubmitting(false);
           setProcessingError(item.errorMessage ?? "Processing failed. Please try again.");
+          return;
+        }
+
+        if (!item) {
+          // Gone without us ever seeing a transactionHeaderId — the global Inbox
+          // indicator (or a manual delete from the Inbox page) must have already
+          // consumed it. We never guess an id here (Fix 6.4.4) — just close quietly;
+          // whichever consumer got there first already navigated correctly.
+          onClose();
           return;
         }
 

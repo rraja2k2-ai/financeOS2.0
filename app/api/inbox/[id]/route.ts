@@ -5,8 +5,9 @@ import { deleteQueueItem, getInboxItemStatus } from "@/services/capture/inbox.se
 /**
  * Polled by the Capture screen (Fix 6.4A) while a just-submitted receipt is still
  * processing — the screen stays open asking "is this one done yet?" instead of closing
- * blind right after upload. `item: null` means the row is gone, which only ever happens
- * once Save has succeeded (capture_queue never keeps a "Saved" row — see CLAUDE.md §5).
+ * blind right after upload. `item.transactionHeaderId` set means Save succeeded with that
+ * EXACT id (Fix 6.4.4 — never a "latest transaction" guess); `item: null` means the row
+ * was already consumed (e.g. by the global Inbox indicator, if this Modal wasn't first).
  */
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

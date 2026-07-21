@@ -16,13 +16,14 @@ import { usePathname, useRouter } from "next/navigation";
  * enqueue/retry/delete — Activity (and anything else) listens for that one event rather
  * than each page polling its own queue-status endpoint.
  *
- * Post-capture navigation (UX improvement): a capture_queue row that was Processing and
- * is now gone entirely (not moved to Failed) succeeded — the queue never keeps a "Saved"
- * row (CLAUDE.md §5), so this is the only client-observable signal of success. On that
- * signal, look up the newest transaction and navigate there so the user lands directly
- * on what they just captured. Tracked by ID, not just a count, so an unrelated delete of
- * an already-Failed item (which only changes the total, never the Processing set) can
- * never be mistaken for a successful capture.
+ * Post-capture navigation (Fix 6.4.4): this is a FALLBACK for when the Capture Modal
+ * isn't open to see its own capture finish (Modal owns the primary path — see
+ * CaptureModal.tsx). A queue row's `transactionHeaderId` being set is the exact id
+ * processQueueItem's Save step just created — never a "latest transaction" guess.
+ * Whichever poller (this one or the Modal) reads it first navigates AND consumes the
+ * row (`POST /api/inbox/[id]/consume`, metadata-only — never touches Storage). Tracked
+ * by ID, not just a count, so an unrelated delete of an already-Failed item (which only
+ * changes the total, never the Processing set) can never be mistaken for a success.
  */
 
 const POLL_MS = 7000;
@@ -43,12 +44,15 @@ export function InboxIndicator() {
     isRefreshingRef.current = true;
     try {
       const res = await fetch("/api/inbox", { cache: "no-store" });
-      const body = (await res.json().catch(() => null)) as { items?: { id: string; status: string }[] } | null;
+      const body = (await res.json().catch(() => null)) as
+        | { items?: { id: string; status: string; transactionHeaderId: string | null }[] }
+        | null;
       const items = body?.items ?? [];
-      const currentProcessingIds = new Set(items.filter((i) => i.status === "Processing").map((i) => i.id));
-      const currentAllIds = new Set(items.map((i) => i.id));
-
-      const succeededIds = [...prevProcessingIdsRef.current].filter((id) => !currentAllIds.has(id));
+      // Still genuinely in flight — a saved-but-not-yet-consumed row (transactionHeaderId
+      // set) no longer counts as "Processing" for the badge, even though its status
+      // column hasn't changed (Fix 6.4.4 never introduces a new status value).
+      const stillProcessing = items.filter((i) => i.status === "Processing" && !i.transactionHeaderId);
+      const currentProcessingIds = new Set(stillProcessing.map((i) => i.id));
       const anyFinished = currentProcessingIds.size < prevProcessingIdsRef.current.size;
 
       prevProcessingIdsRef.current = currentProcessingIds;
@@ -58,11 +62,14 @@ export function InboxIndicator() {
         window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
       }
 
-      if (succeededIds.length > 0) {
-        const latest = await fetch("/api/transactions/latest", { cache: "no-store" })
-          .then((r) => r.json())
-          .catch(() => null);
-        if (latest?.id) router.push(`/activity?highlight=${latest.id}`);
+      // Fallback pickup: a capture finished but nothing has consumed it yet (the Modal
+      // that started it isn't open anymore). Pick one per tick — normally there's only
+      // one capture in flight at a time (CLAUDE.md §7).
+      const readyToPickUp = items.find((i) => i.transactionHeaderId);
+      if (readyToPickUp?.transactionHeaderId) {
+        const headerId = readyToPickUp.transactionHeaderId;
+        fetch(`/api/inbox/${readyToPickUp.id}/consume`, { method: "POST" }).catch(() => {});
+        router.push(`/activity?highlight=${headerId}`);
       }
     } catch {
       // Network hiccup — keep the previous state; next poll will correct it.

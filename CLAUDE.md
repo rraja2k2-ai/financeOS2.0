@@ -200,10 +200,15 @@ Refresh Activity
    no eligibility check, confidence threshold, or manual approval step:
    transaction header + line items persisted atomically, receipt attachment
    rows linked to the already-uploaded Storage files.
-6. **Delete the queue row** — the moment the save succeeds, its
-   `capture_queue` row is deleted outright. The queue never holds a
-   "Saved" row; the transaction in Activity **is** the record from that
-   point on.
+6. **Record the exact id, then delete the queue row** — the moment the
+   save succeeds, `capture_queue.transaction_header_id` is set to the
+   EXACT `transaction_headers.id` just created (status stays `Processing`
+   — no new status value). Whichever poller reads it first (the Capture
+   Modal, or `InboxIndicator` as a fallback — see §7) navigates using that
+   exact id and then deletes the row (`consumeSavedCapture`, metadata-only
+   — never touches Storage). The queue never holds a **visible** "Saved"
+   row (no new status, and the id-bearing window is momentary); the
+   transaction in Activity **is** the record from that point on.
 7. **Refresh Activity** — the saved transaction appears automatically,
    newest first; see §7.
 
@@ -287,27 +292,41 @@ reused for the whole session — no repeated queries mid-session.
   Edit or the Receipt Viewer directly — those stay behind `⋮`. **The
   Capture Modal owns this detection while it's open**: it polls its own
   just-queued `capture_queue` row directly (`GET /api/inbox/[id]`) and
-  reacts the moment it either disappears (saved) or turns `Failed`,
-  rather than closing blind right after upload. A failed capture keeps
-  the Capture Modal open with the real error, Retry, Delete, and Open
-  Capture Inbox — Capture Inbox stays exception-handling only, never the
-  normal path. `InboxIndicator` (the global, always-mounted indicator) is
-  the fallback for the same signal whenever the Modal isn't open to see it
-  — same underlying logic: `capture_queue` never keeps a "Saved" row to
-  look up (§5), so a vanished-not-Failed ID is the only success signal
-  available; the newest transaction (`transaction_headers.created_at`) is
-  then assumed to be the one just created. This is a deliberate
-  simplification for a single-user app with normally one capture in
-  flight at a time — do not "fix" it by resurrecting a lingering Saved
-  state.
-- **Activity always sorts and groups by capture time**
-  (`transaction_headers.created_at`), never by the receipt's own printed
-  date — a receipt can carry any date the merchant printed on it, but "what
-  did I just capture" is what keeps the feed coherent. The receipt's date is
-  display-only, surfaced solely inside Edit. **Dashboard's Recent
-  Transactions card follows the same rule** — both its ordering and its
-  displayed date (`listRecent` in `transaction-header.repository.ts`) are
-  capture time, never the receipt's printed date.
+  reacts the moment its `transactionHeaderId` is set (saved) or it turns
+  `Failed`, rather than closing blind right after upload. A failed
+  capture keeps the Capture Modal open with the real error, Retry,
+  Delete, and Open Capture Inbox — Capture Inbox stays exception-handling
+  only, never the normal path. **Navigation always uses that exact id —
+  never a "latest transaction" lookup** (Fix 6.4.4; the previous
+  vanished-row/`getLatest` heuristic was unreliable). `InboxIndicator`
+  (the global, always-mounted indicator) is the fallback for the same
+  signal whenever the Modal isn't open to see it: whichever of the two
+  pollers reads a row's `transactionHeaderId` first navigates with it and
+  then clears the row (`consumeSavedCapture`, §5) — safe to race, since
+  both would read the same id and a second clear is a no-op. This is a
+  deliberate simplification for a single-user app with normally one
+  capture in flight at a time.
+- **Two distinct dates exist per transaction, and each drives a different,
+  non-overlapping part of the app (Fix 6.4.2) — never blend or substitute
+  one for the other:**
+  - **Receipt Date** (`transaction_headers.transaction_date`) is the
+    business/accounting date. It drives **Activity's ordering, grouping,
+    and period filter**, and is what Budget, Reports, and Project
+    allocations already keyed off of. A receipt captured today for an
+    older expense still lands under its own date in Activity.
+  - **Ingestion Date** (`transaction_headers.created_at`) is the system
+    capture timestamp. It drives **only** the Dashboard's Recent
+    Transactions card's ordering (`listRecent` in
+    `transaction-header.repository.ts`). Post-capture navigation (§5/§7)
+    uses the exact id `capture_queue.transaction_header_id` carries, never
+    a date-based lookup. Ingestion Date never orders or groups Activity.
+  - Activity's expanded transaction shows **both** — Receipt Date as the
+    primary business date, Captured (date + time) as informational only —
+    so the distinction stays visible rather than silently assumed.
+    **Dashboard's Recent Transactions card shows both too** (Fix 6.4.4,
+    e.g. "R: Jul 19 • C: Jul 20, 3:32 PM") so it's clear where to find the
+    transaction inside Activity, even though the card's own sort order
+    stays Ingestion Date.
 - Header-level actions on a transaction (edit, view receipt, delete) live
   behind a single `⋮` overflow menu in the transaction header — icon-only,
   no permanently visible action buttons, rendered through a portal so it's

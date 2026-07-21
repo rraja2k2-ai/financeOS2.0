@@ -13,17 +13,27 @@
  *                      result, saves it IMMEDIATELY via the EXISTING Save flow — no
  *                      eligibility check, no confidence threshold, no account-resolution
  *                      gate, no manual Review step:
- *                        success → transaction + receipt_attachments persisted, THEN the
- *                          queue row is DELETED immediately (never left behind as "Saved")
+ *                        success → transaction + receipt_attachments persisted, then the
+ *                          row's transaction_header_id is set to the EXACT id just created
+ *                          (status stays Processing — no new status value) so whichever
+ *                          poller sees it (Capture Modal or the global Inbox indicator)
+ *                          can navigate by that exact id, never a "latest transaction"
+ *                          guess (Fix 6.4.4). consumeSavedCapture() then removes the row.
  *                        failure (AI call OR the save itself) → status=Failed, error_message,
  *                          retry_count += 1 — the row stays for retry, pages untouched
  *   retryQueueItem()   Failed → Processing, retry_count += 1, error_message=null, then the
  *                      SAME processQueueItem() runs again — no duplicated processing logic.
- *   deleteQueueItem()  user-initiated delete from the Inbox — removes the queue row AND its
- *                      Storage files. Only ever called on a Processing/Failed row (nothing
- *                      reaches this queue is ever "Saved" — see above), so it's always safe
- *                      to remove the files; they aren't referenced by any transaction yet.
- *                      Never touches transaction_headers.
+ *   consumeSavedCapture() metadata-only removal of an already-SAVED row (transaction_header_id
+ *                      set) — never touches Storage, since those files now belong to the
+ *                      transaction's receipt_attachments. Called by whichever poller (Modal
+ *                      or Inbox indicator) first reads the id, AND by deleteQueueItem below
+ *                      when a user manually deletes a row in that same state.
+ *   deleteQueueItem()  user-initiated delete from the Inbox. Delegates to consumeSavedCapture
+ *                      (no Storage touched) if transaction_header_id is already set — that
+ *                      row is an already-successful capture, no matter how "stuck" it looks
+ *                      in the Inbox. Otherwise (genuinely Processing-in-flight or Failed,
+ *                      never linked to a transaction) removes the queue row AND its Storage
+ *                      files. Never touches transaction_headers either way.
  *
  * Reuses the existing pipeline pieces untouched: master-data.service, capture.service
  * (processCapture), save-capture.service (saveReviewedCapture, unmodified), the provider
@@ -95,11 +105,12 @@ export async function enqueueCapture(
 /**
  * The background step: runs the EXISTING AI pipeline against the stored pages + context,
  * then — if it returns a result — saves it IMMEDIATELY via the EXISTING Save flow and
- * deletes the queue row (Fix 5.1 — the queue never keeps a "Saved" row; Activity is the
- * permanent record). No eligibility logic: if the AI successfully returns a transaction,
- * it gets saved; if anything in that chain throws (the AI call, or the save itself), the
- * item becomes Failed with a friendly message so the receipt is never lost and the user
- * can retry.
+ * records the created transaction's exact id on the queue row (Fix 6.4.4), which a
+ * client then consumes and clears (Fix 5.1 — the queue never keeps a visibly "Saved"
+ * row; Activity is the permanent record). No eligibility logic: if the AI successfully
+ * returns a transaction, it gets saved; if anything in that chain throws (the AI call,
+ * or the save itself), the item becomes Failed with a friendly message so the receipt is
+ * never lost and the user can retry.
  */
 export async function processQueueItem(queueId: string): Promise<void> {
   const supabase = createBackgroundSupabaseClient();
@@ -118,7 +129,7 @@ export async function processQueueItem(queueId: string): Promise<void> {
     const masterData = await loadCaptureMasterData(supabase);
     const result = await processCapture({ userContext: row.user_context, pages, masterData });
 
-    await saveReviewedCapture(supabase, {
+    const { headerId } = await saveReviewedCapture(supabase, {
       reviewed: reviewedFromResult(result),
       aiContext: row.user_context,
       pages: [],
@@ -128,11 +139,11 @@ export async function processQueueItem(queueId: string): Promise<void> {
       audit: { aiProvider: getActiveCaptureProviderName(), processedAt: row.updated_at, captureSource: row.capture_source },
     });
 
-    // Saved — the queue's job for this capture is done. Delete the row outright (never
-    // update to a "Saved" status): the transaction + its receipt_attachments are now
-    // Activity's record, not the queue's. Storage files are NOT touched here — they're
-    // now referenced by receipt_attachments.
-    await captureQueueRepository.remove(supabase, queueId);
+    // Saved — record the EXACT transaction_header.id this capture became (Fix 6.4.4), so
+    // navigation never has to guess via "latest transaction." Status stays Processing (no
+    // new status value written — CLAUDE.md §5); the row itself is removed by whichever
+    // poller reads this id first, via consumeSavedCapture().
+    await captureQueueRepository.update(supabase, queueId, { transaction_header_id: headerId });
 
     revalidatePath("/activity");
     revalidatePath("/");
@@ -171,15 +182,34 @@ export async function retryQueueItem(supabase: SupabaseClient, queueId: string):
 }
 
 /**
- * Removes the queue row and its Storage files. Only ever called on a Processing/Failed
- * row — a successful capture's row is already gone by the time anyone could click Delete
- * on it (see processQueueItem), so there is no "already Saved, keep the files" case to
- * guard against here. Never touches transaction_headers/transaction_items — deleting a
- * queue record never deletes a transaction.
+ * Metadata-only removal for a row whose transaction_header_id is already set (Fix 6.4.4)
+ * — its Storage files now belong to the saved transaction's receipt_attachments and must
+ * never be touched, whether this runs from a poller's automatic pickup or a user's manual
+ * Delete on the Inbox page (deleteQueueItem routes here for exactly that reason). A no-op
+ * if another caller already consumed (and thus deleted) the row first.
+ */
+export async function consumeSavedCapture(supabase: SupabaseClient, queueId: string): Promise<void> {
+  await captureQueueRepository.remove(supabase, queueId).catch(() => {});
+}
+
+/**
+ * User-initiated delete from the Capture Inbox (any status shown there is fair game to
+ * dismiss). A row with `transaction_header_id` already set (Fix 6.4.4) is an already-
+ * successful capture just waiting to be consumed — never Storage-eligible, no matter how
+ * it's dismissed, since its files are now referenced by the saved transaction's
+ * receipt_attachments. That case defers to consumeSavedCapture (metadata-only). Only a
+ * genuinely Processing-in-flight or Failed row — never linked to a transaction — has its
+ * Storage files removed here. Never touches transaction_headers/transaction_items either
+ * way — deleting a queue record never deletes a transaction.
  */
 export async function deleteQueueItem(supabase: SupabaseClient, queueId: string): Promise<void> {
   const row = await captureQueueRepository.getById(supabase, queueId);
   if (!row) return;
+
+  if (row.transaction_header_id) {
+    await consumeSavedCapture(supabase, queueId);
+    return;
+  }
 
   await receiptStorageRepository.removeReceiptPages(supabase, row.pages.map((p) => p.storagePath)).catch(() => {});
   await captureQueueRepository.remove(supabase, queueId);
@@ -199,9 +229,13 @@ export type InboxItem = {
   firstPage: CaptureQueuePage | null;
   aiProvider: string | null;
   captureSource: string;
+  /** Set once Save succeeds (Fix 6.4.4) — the exact transaction_headers.id this capture
+   *  became, present only in the brief window before a client consumes the row. */
+  transactionHeaderId: string | null;
 };
 
-/** Every queue row — Processing (in flight) or Failed (waiting on retry). Nothing else lingers here. */
+/** Every queue row — Processing (in flight, or just-saved and awaiting pickup) or Failed
+ *  (waiting on retry). Nothing else lingers here. */
 export async function listInboxItems(supabase: SupabaseClient): Promise<InboxItem[]> {
   const rows = await captureQueueRepository.list(supabase);
 
@@ -218,21 +252,24 @@ export async function listInboxItems(supabase: SupabaseClient): Promise<InboxIte
     firstPage: row.pages[0] ?? null,
     aiProvider: row.ai_provider,
     captureSource: row.capture_source,
+    transactionHeaderId: row.transaction_header_id,
   }));
 }
 
 /** Display-ready status for ONE queue row — polled by the Capture screen (Fix 6.4A)
  *  while its own just-submitted capture is processing, so it can stay open and react the
- *  moment the item succeeds (row gone) or fails, instead of closing blind after upload. */
+ *  moment the item succeeds (transactionHeaderId set, Fix 6.4.4) or fails, instead of
+ *  closing blind after upload or guessing at a "latest transaction." */
 export type InboxItemStatus = {
   status: CaptureQueueStatus;
   errorMessage: string | null;
+  transactionHeaderId: string | null;
 };
 
 export async function getInboxItemStatus(supabase: SupabaseClient, queueId: string): Promise<InboxItemStatus | null> {
   const row = await captureQueueRepository.getById(supabase, queueId);
   if (!row) return null;
-  return { status: row.status, errorMessage: row.status === "Failed" ? row.error_message : null };
+  return { status: row.status, errorMessage: row.status === "Failed" ? row.error_message : null, transactionHeaderId: row.transaction_header_id };
 }
 
 async function downloadQueuePages(supabase: SupabaseClient, pages: CaptureQueuePage[]): Promise<CaptureDocumentPage[]> {

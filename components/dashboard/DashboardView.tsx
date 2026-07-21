@@ -185,8 +185,9 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
                 <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-secondary text-[15px]">🧾</div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13.5px] font-semibold">{t.merchant || "Unknown merchant"}</p>
-                  <p className="truncate text-[11.5px] text-muted-foreground">
-                    {t.primaryCategory || "Uncategorized"} · {formatShortDate(t.capturedDate)}
+                  <p className="truncate text-[11.5px] text-muted-foreground">{t.primaryCategory || "Uncategorized"}</p>
+                  <p className="truncate text-[10.5px] text-muted-foreground">
+                    R: {formatShortDate(t.transactionDate)} • C: {formatShortDateTime(t.capturedAt)}
                   </p>
                 </div>
                 <div className={cn("flex-none text-right", hidden && "blur-sm select-none")}>
@@ -220,6 +221,15 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
 
 function formatShortDate(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { day: "numeric", month: "short" });
+}
+
+/** "Jul 20, 3:32 PM" — Ingestion Date + time, shown alongside Receipt Date (Fix 6.4.4) so
+ *  the card tells the user where to find this transaction inside Activity. */
+function formatShortDateTime(iso: string): string {
+  const d = new Date(iso);
+  const datePart = d.toLocaleDateString("en-US", { day: "numeric", month: "short" });
+  const timePart = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return `${datePart}, ${timePart}`;
 }
 
 function RingChart({ pct }: { pct: number }) {
