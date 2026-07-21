@@ -300,14 +300,23 @@ reused for the whole session — no repeated queries mid-session.
   simplification for a single-user app with normally one capture in
   flight at a time — do not "fix" it by resurrecting a lingering Saved
   state.
-- **Activity always sorts and groups by capture time**
-  (`transaction_headers.created_at`), never by the receipt's own printed
-  date — a receipt can carry any date the merchant printed on it, but "what
-  did I just capture" is what keeps the feed coherent. The receipt's date is
-  display-only, surfaced solely inside Edit. **Dashboard's Recent
-  Transactions card follows the same rule** — both its ordering and its
-  displayed date (`listRecent` in `transaction-header.repository.ts`) are
-  capture time, never the receipt's printed date.
+- **Two distinct dates exist per transaction, and each drives a different,
+  non-overlapping part of the app (Fix 6.4.2) — never blend or substitute
+  one for the other:**
+  - **Receipt Date** (`transaction_headers.transaction_date`) is the
+    business/accounting date. It drives **Activity's ordering, grouping,
+    and period filter**, and is what Budget, Reports, and Project
+    allocations already keyed off of. A receipt captured today for an
+    older expense still lands under its own date in Activity.
+  - **Ingestion Date** (`transaction_headers.created_at`) is the system
+    capture timestamp. It drives **only** the Dashboard's Recent
+    Transactions card (`listRecent` in `transaction-header.repository.ts`)
+    and identifying "the transaction a capture just became" for
+    post-capture navigation (`getLatest`, §5). It never orders or groups
+    Activity.
+  - Activity's expanded transaction shows **both** — Receipt Date as the
+    primary business date, Captured (date + time) as informational only —
+    so the distinction stays visible rather than silently assumed.
 - Header-level actions on a transaction (edit, view receipt, delete) live
   behind a single `⋮` overflow menu in the transaction header — icon-only,
   no permanently visible action buttons, rendered through a portal so it's

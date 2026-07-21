@@ -81,6 +81,19 @@ function fmt(n: number, decimals = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+/** "15 Jul 2026" — the receipt/business date, Activity's primary date (Fix 6.4.2). */
+function formatFullDate(dateIso: string): string {
+  return new Date(dateIso + "T00:00:00").toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** "20 Jul 2026, 8:42 PM" — the ingestion timestamp, informational only (Fix 6.4.2). */
+function formatCapturedAt(iso: string): string {
+  const d = new Date(iso);
+  const datePart = d.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
+  const timePart = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return `${datePart}, ${timePart}`;
+}
+
 /**
  * Qty is stored free text (Fix 5.2). Weight/volume/etc. units are shown exactly as
  * extracted — never reformatted. Only when no unit is present (a bare piece count, e.g.
@@ -302,7 +315,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   const { start: periodStart, end: periodEnd } = resolvePeriodRange(period, customStart, customEnd);
 
   const inPeriod = useMemo(
-    () => transactions.filter((t) => t.capturedDate >= periodStart && t.capturedDate <= periodEnd),
+    () => transactions.filter((t) => t.transactionDate >= periodStart && t.transactionDate <= periodEnd),
     [transactions, periodStart, periodEnd]
   );
 
@@ -324,7 +337,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   type MatchedItem = ActivityTransaction["items"][number] & {
     txnId: string;
     merchant: string | null;
-    capturedDate: string;
+    transactionDate: string;
     currency: string;
   };
 
@@ -339,7 +352,7 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
           (item.secondaryCategory ?? "").toLowerCase().includes(q) ||
           (t.merchant ?? "").toLowerCase().includes(q);
         if (hit) {
-          results.push({ ...item, txnId: t.id, merchant: t.merchant, capturedDate: t.capturedDate, currency: t.currency });
+          results.push({ ...item, txnId: t.id, merchant: t.merchant, transactionDate: t.transactionDate, currency: t.currency });
         }
       }
     }
@@ -351,19 +364,19 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   const matchedByDate = useMemo(() => {
     const map = new Map<string, MatchedItem[]>();
     for (const i of matchedItems) {
-      if (!map.has(i.capturedDate)) map.set(i.capturedDate, []);
-      map.get(i.capturedDate)!.push(i);
+      if (!map.has(i.transactionDate)) map.set(i.transactionDate, []);
+      map.get(i.transactionDate)!.push(i);
     }
     return Array.from(map.entries());
   }, [matchedItems]);
 
-  // groupTxns is already sorted newest-captured-first (activity.service.ts), so the
+  // groupTxns is already sorted newest-receipt-date-first (activity.service.ts), so the
   // Map's insertion order — and therefore this date grouping — stays newest first too.
   const byDate = useMemo(() => {
     const map = new Map<string, ActivityTransaction[]>();
     for (const t of groupTxns) {
-      if (!map.has(t.capturedDate)) map.set(t.capturedDate, []);
-      map.get(t.capturedDate)!.push(t);
+      if (!map.has(t.transactionDate)) map.set(t.transactionDate, []);
+      map.get(t.transactionDate)!.push(t);
     }
     return Array.from(map.entries());
   }, [groupTxns]);
@@ -572,6 +585,18 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
                       background, thin dividers, and a vertical accent line tying the rows together. */}
                   {isOpen && (
                     <div className="border-t border-border">
+                      {/* Transaction Details (Fix 6.4.2) — Receipt Date is the primary
+                          business date; Captured (ingestion time) is informational only. */}
+                      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-3.5 py-2.5 text-[11px]">
+                        <div>
+                          <p className="text-muted-foreground">Receipt Date</p>
+                          <p className="mt-0.5 font-semibold text-foreground">{formatFullDate(t.transactionDate)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-muted-foreground">Captured</p>
+                          <p className="mt-0.5 font-semibold text-foreground">{formatCapturedAt(t.capturedAt)}</p>
+                        </div>
+                      </div>
                       <div className="relative pl-4">
                         <div className="absolute bottom-0 left-[15px] top-0 w-px bg-primary/25" aria-hidden="true" />
                         {t.items.map((item, i) => (

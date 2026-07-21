@@ -31,10 +31,13 @@ export type ActivityTransaction = {
   id: string;
   receiptId: string;
   merchant: string | null;
-  /** The receipt's own printed date — display only, inside Edit. Never used for Activity's sorting/grouping/filtering (see capturedDate). */
+  /** Receipt/business date (transaction_headers.transaction_date) — the primary date
+   *  Activity sorts, groups, and filters by. See CLAUDE.md §7. */
   transactionDate: string;
-  /** Calendar day the transaction was captured/saved (transaction_headers.created_at), local to this list's date-grouping and period filter — see CLAUDE.md §7. */
-  capturedDate: string;
+  /** Ingestion timestamp (transaction_headers.created_at) — display-only, shown alongside
+   *  transactionDate inside the expanded transaction. Never drives Activity's ordering or
+   *  grouping; that's transactionDate's job. See CLAUDE.md §7. */
+  capturedAt: string;
   currency: string;
   originalAmount: number;
   sgdAmount: number;
@@ -66,11 +69,14 @@ export async function getActivity(
     itemsByHeader.get(item.header_id)!.push(item);
   }
 
-  // Activity always sorts by capture time (transaction_headers.created_at), never by
-  // the receipt's own printed date — a receipt can carry any date the merchant printed
-  // on it, but "what did I just capture" is what makes the newest-first feed coherent.
-  // See CLAUDE.md §7.
-  const sortedHeaders = [...headers].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  // Activity always sorts by the receipt/business date (transaction_date), never by
+  // ingestion time — this is the accounting timeline (also used by Budget/Reports/
+  // Project allocations), so a receipt captured today for an older expense still lands
+  // under its own date. created_at (capturedAt below) is display-only here. See
+  // CLAUDE.md §7. Same-day headers tiebreak newest-captured-first.
+  const sortedHeaders = [...headers].sort(
+    (a, b) => b.transaction_date.localeCompare(a.transaction_date) || b.created_at.localeCompare(a.created_at)
+  );
 
   const transactions = sortedHeaders.map((header): ActivityTransaction => {
     const headerItems = itemsByHeader.get(header.id) ?? [];
@@ -90,7 +96,7 @@ export async function getActivity(
       receiptId: header.receipt_id,
       merchant: header.merchant,
       transactionDate: header.transaction_date,
-      capturedDate: header.created_at.slice(0, 10),
+      capturedAt: header.created_at,
       currency: header.currency,
       originalAmount: Number(header.original_amount),
       sgdAmount: Number(header.sgd_total_amount),

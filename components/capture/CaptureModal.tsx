@@ -114,6 +114,11 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True only once the component has actually unmounted — distinct from the polling
+  // effect's own per-run `cancelled` flag, which also flips on a deliberate dependency
+  // change (e.g. setSucceeded(true) re-running that effect) and must NOT be used to abort
+  // the in-flight success handler itself (Fix 6.4.1 — see the polling effect below).
+  const unmountedRef = useRef(false);
 
   // Keep latest state in refs so the unmount-only cleanup below can release object URLs
   // without re-running (and revoking live URLs) on every state change.
@@ -124,6 +129,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
 
   useEffect(() => {
     return () => {
+      unmountedRef.current = true;
       releasePages(receiptRef.current?.pages ?? []);
       releasePages(pendingRef.current?.pages ?? []);
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
@@ -310,13 +316,18 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
 
         if (!item) {
           // Gone — the queue never keeps a "Saved" row, so this means Save succeeded.
+          // From here on we're committed to closing + navigating: setSucceeded(true) is a
+          // dependency of THIS effect, so React tears it down (flipping `cancelled` above)
+          // the moment this state commits — using `cancelled` past this point would abort
+          // our own success handler before the auto-close timer is ever scheduled (Fix
+          // 6.4.1). Only a genuine unmount should stop us now.
           window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
           setStatusText("Transaction saved!");
           setSucceeded(true);
           const latest = await fetch("/api/transactions/latest", { cache: "no-store" })
             .then((r) => r.json())
             .catch(() => null);
-          if (cancelled) return;
+          if (unmountedRef.current) return;
           closeTimerRef.current = setTimeout(() => {
             onClose();
             router.push(latest?.id ? `/activity?highlight=${latest.id}` : "/activity");
