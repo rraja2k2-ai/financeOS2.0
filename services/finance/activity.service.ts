@@ -113,9 +113,14 @@ export async function getActivity(
 export type RecentTransaction = {
   id: string;
   merchant: string | null;
-  /** Calendar day the transaction was captured/saved (transaction_headers.created_at) —
-   *  never the receipt's own printed date. See CLAUDE.md §7. */
-  capturedDate: string;
+  /** Receipt/business date (transaction_headers.transaction_date) — shown alongside
+   *  capturedAt (Fix 6.4.4) so the card tells the user where to find this transaction
+   *  inside Activity, which groups by Receipt Date. Display-only here; this card's
+   *  ordering stays Ingestion Date. See CLAUDE.md §7. */
+  transactionDate: string;
+  /** Ingestion timestamp (transaction_headers.created_at) — drives this card's ordering
+   *  (via listRecent) and is shown alongside transactionDate. See CLAUDE.md §7. */
+  capturedAt: string;
   primaryCategory: string | null;
   currency: string;
   originalAmount: number;
@@ -131,7 +136,8 @@ export async function getRecentTransactions(supabase: SupabaseClient, limit: num
   return headers.map((header) => ({
     id: header.id,
     merchant: header.merchant,
-    capturedDate: header.created_at.slice(0, 10),
+    transactionDate: header.transaction_date,
+    capturedAt: header.created_at,
     primaryCategory: header.primary_category,
     currency: header.currency,
     originalAmount: Number(header.original_amount),

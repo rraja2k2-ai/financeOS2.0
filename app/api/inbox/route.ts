@@ -68,7 +68,7 @@ export async function GET() {
     const supabase = await createServerSupabaseClient();
     const items = await listInboxItems(supabase);
     return NextResponse.json({
-      items: items.map((i) => ({ id: i.id, status: i.status, merchant: i.merchant })),
+      items: items.map((i) => ({ id: i.id, status: i.status, merchant: i.merchant, transactionHeaderId: i.transactionHeaderId })),
     });
   } catch (err) {
     // Most likely migration 013 hasn't been run yet — report empty rather than erroring the shell.
