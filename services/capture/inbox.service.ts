@@ -23,16 +23,17 @@
  *                          retry_count += 1 — the row stays for retry, pages untouched
  *   retryQueueItem()   Failed → Processing, retry_count += 1, error_message=null, then the
  *                      SAME processQueueItem() runs again — no duplicated processing logic.
- *   consumeSavedCapture() metadata-only removal of an already-SAVED row, called by whichever
- *                      client (Modal or Inbox indicator) first reads its transaction_header_id
- *                      — deliberately distinct from deleteQueueItem below: the Storage files
- *                      now belong to the transaction's receipt_attachments and must never be
- *                      touched here.
- *   deleteQueueItem()  user-initiated delete from the Inbox — removes the queue row AND its
- *                      Storage files. Only ever called on a Processing/Failed row (a saved
- *                      capture is consumed via consumeSavedCapture instead, which never
- *                      touches Storage), so it's always safe to remove the files; they
- *                      aren't referenced by any transaction yet. Never touches transaction_headers.
+ *   consumeSavedCapture() metadata-only removal of an already-SAVED row (transaction_header_id
+ *                      set) — never touches Storage, since those files now belong to the
+ *                      transaction's receipt_attachments. Called by whichever poller (Modal
+ *                      or Inbox indicator) first reads the id, AND by deleteQueueItem below
+ *                      when a user manually deletes a row in that same state.
+ *   deleteQueueItem()  user-initiated delete from the Inbox. Delegates to consumeSavedCapture
+ *                      (no Storage touched) if transaction_header_id is already set — that
+ *                      row is an already-successful capture, no matter how "stuck" it looks
+ *                      in the Inbox. Otherwise (genuinely Processing-in-flight or Failed,
+ *                      never linked to a transaction) removes the queue row AND its Storage
+ *                      files. Never touches transaction_headers either way.
  *
  * Reuses the existing pipeline pieces untouched: master-data.service, capture.service
  * (processCapture), save-capture.service (saveReviewedCapture, unmodified), the provider
@@ -181,25 +182,34 @@ export async function retryQueueItem(supabase: SupabaseClient, queueId: string):
 }
 
 /**
- * Metadata-only removal for a row whose transaction_header_id has already been read by a
- * client (Fix 6.4.4) — deliberately NOT deleteQueueItem below: the Storage files it
- * referenced now belong to the saved transaction's receipt_attachments and must never be
- * touched. A no-op if another poller already consumed (and thus deleted) it first.
+ * Metadata-only removal for a row whose transaction_header_id is already set (Fix 6.4.4)
+ * — its Storage files now belong to the saved transaction's receipt_attachments and must
+ * never be touched, whether this runs from a poller's automatic pickup or a user's manual
+ * Delete on the Inbox page (deleteQueueItem routes here for exactly that reason). A no-op
+ * if another caller already consumed (and thus deleted) the row first.
  */
 export async function consumeSavedCapture(supabase: SupabaseClient, queueId: string): Promise<void> {
   await captureQueueRepository.remove(supabase, queueId).catch(() => {});
 }
 
 /**
- * Removes the queue row and its Storage files. Only ever called on a Processing/Failed
- * row — a saved capture is removed via consumeSavedCapture instead (see processQueueItem),
- * which never touches Storage, so there is no "already Saved, keep the files" case to
- * guard against here. Never touches transaction_headers/transaction_items — deleting a
- * queue record never deletes a transaction.
+ * User-initiated delete from the Capture Inbox (any status shown there is fair game to
+ * dismiss). A row with `transaction_header_id` already set (Fix 6.4.4) is an already-
+ * successful capture just waiting to be consumed — never Storage-eligible, no matter how
+ * it's dismissed, since its files are now referenced by the saved transaction's
+ * receipt_attachments. That case defers to consumeSavedCapture (metadata-only). Only a
+ * genuinely Processing-in-flight or Failed row — never linked to a transaction — has its
+ * Storage files removed here. Never touches transaction_headers/transaction_items either
+ * way — deleting a queue record never deletes a transaction.
  */
 export async function deleteQueueItem(supabase: SupabaseClient, queueId: string): Promise<void> {
   const row = await captureQueueRepository.getById(supabase, queueId);
   if (!row) return;
+
+  if (row.transaction_header_id) {
+    await consumeSavedCapture(supabase, queueId);
+    return;
+  }
 
   await receiptStorageRepository.removeReceiptPages(supabase, row.pages.map((p) => p.storagePath)).catch(() => {});
   await captureQueueRepository.remove(supabase, queueId);
