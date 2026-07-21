@@ -1,12 +1,14 @@
 import Link from "next/link";
 
 const SETTINGS_ITEMS = [
+  { href: "/projects", label: "Projects", description: "Project budgets and allocations" },
+  { href: "/invest", label: "Investments", description: "Investment accounts and holdings" },
+  { href: "/settings/ai", label: "AI", description: "Open the Capture Inbox" },
   { href: "/settings/appearance", label: "Appearance", description: "System, Dark, or Light theme" },
   { href: "/settings/general", label: "General", description: "Base currency" },
-  { href: "/settings/exchange-rates", label: "Exchange Rates", description: "Manage conversion rates" },
   { href: "/settings/categories", label: "Categories", description: "Categorization taxonomy" },
   { href: "/settings/accounts", label: "Accounts", description: "Your linked accounts" },
-  { href: "/settings/ai", label: "AI", description: "Open the Capture Inbox" },
+  { href: "/settings/exchange-rates", label: "Exchange Rates", description: "Manage conversion rates" },
   { href: "/settings/data-management", label: "Data Management", description: "Export, reports, import" },
   { href: "/settings/about", label: "About", description: "App information" },
 ];

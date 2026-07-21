@@ -331,6 +331,15 @@ reused for the whole session — no repeated queries mid-session.
   behind a single `⋮` overflow menu in the transaction header — icon-only,
   no permanently visible action buttons, rendered through a portal so it's
   never clipped by the transaction card's own bounds.
+- **Bottom navigation holds only the five frequently-used modules** —
+  Dashboard, Activity, Accounts, Budget, Settings — since
+  mobile screen width can't fit more without crowding. Every other page
+  (Projects, Investments, AI Settings, Appearance, Base Currency,
+  Categories, Exchange Rates, Data Management, About) is reachable one
+  tap away from the Settings hub (`/settings`), which is a plain list of
+  links — no page was removed or had its own URL changed, they're just
+  not primary-nav-level. A new secondary/administrative page is added to
+  that Settings list, never to the bottom nav.
 - **Theme (Settings → Appearance) is System / Dark / Light**, default
   **Dark** when nothing has been chosen yet. It's a per-device rendering
   preference stored in `localStorage` only (`lib/theme.ts`) — never in the
