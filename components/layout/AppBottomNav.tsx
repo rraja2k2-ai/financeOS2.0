@@ -6,6 +6,12 @@ import { cn } from "@/lib/utils";
 import { CaptureLauncher } from "@/components/capture/CaptureLauncher";
 import { InboxIndicator } from "@/components/capture/InboxIndicator";
 
+/**
+ * The five frequently-used modules only (mobile bottom nav has limited room). Everything
+ * else — Projects, Investments, AI Settings, Appearance, Base Currency, Categories, and
+ * other administration pages — lives one tap away in Settings (CLAUDE.md §7); no page was
+ * removed, they just aren't primary-nav-level anymore.
+ */
 const NAV_ITEMS = [
   {
     href: "/",
@@ -39,20 +45,6 @@ const NAV_ITEMS = [
         <path d="M7 2v4M17 2v4M3 10h18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       </>
     ),
-  },
-  {
-    href: "/projects",
-    label: "Projects",
-    icon: (
-      <>
-        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-      </>
-    ),
-  },
-  {
-    href: "/invest",
-    label: "Invest",
-    icon: <path d="M3 3v18h18M19 9l-5 5-4-4-4 4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
   },
   {
     href: "/settings",
