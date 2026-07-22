@@ -29,8 +29,10 @@ project, and monitor accounts and investments.
   between "correct for a multi-user SaaS" and "correct for one household's
   books," choose the latter.
 - The product's core loop is: capture a receipt (photo or text) → AI
-  extracts structured data → transaction is saved immediately → it shows up
-  in Activity. Review is not a step in this loop — see §5/§7.
+  extracts structured data → transaction is saved immediately → Activity
+  opens with it expanded, highlighted, and already in Edit for a quick
+  correction pass (Post-Save Review). Review never gates the save — it
+  only ever happens after the transaction already exists — see §5/§7.
 
 ---
 
@@ -271,15 +273,18 @@ reused for the whole session — no repeated queries mid-session.
 - **Minimize clicks for a personal, daily-use workflow.** This is a tool
   one person uses repeatedly, not a form for occasional enterprise users —
   optimize for speed of repeated use over guided hand-holding.
-- **Review is not part of the capture flow.** A successful AI result is
-  saved immediately, with no manual approval step. The Review Screen
-  component still exists and is still the single shared editor, but it is
-  reached only from Activity's Edit action — never from a fresh capture.
-- **One Review Screen, reused — now Edit-only.** The same Review Screen
-  component that once gated every capture now only edits an already-saved
-  transaction. There is no second editor anywhere in the app. Any future
-  "edit" surface must route through this one component, reshaping existing
-  data to look like a fresh AI result rather than building a parallel form.
+- **Review never gates the save.** A successful AI result is saved
+  immediately, with no manual approval step before persistence — Review
+  only ever happens after the transaction already exists, either as
+  Post-Save Review right after a capture, or manually later (below).
+- **One Review Screen, reused — now Edit-only, opened either by hand or
+  automatically.** The same Review Screen component that once gated every
+  capture now only edits an already-saved transaction — whether opened
+  manually via Activity's `⋮ → Edit`, or automatically right after a fresh
+  capture (Post-Save Review, below). There is no second editor anywhere in
+  the app. Any future "edit" surface must route through this one
+  component, reshaping existing data to look like a fresh AI result rather
+  than building a parallel form.
 - **Activity is the source of truth** for what has been saved. Once a
   transaction is saved, Activity is where it lives, is displayed, is edited,
   viewed (its original receipt), and is deleted from — not a second
@@ -287,25 +292,41 @@ reused for the whole session — no repeated queries mid-session.
   background capture finishes, newest transaction first — the user is never
   required to manually reload to see it.
 - **After a successful capture, the app navigates the user to Activity,
-  auto-expands the new transaction, and highlights it for ~3 seconds**
-  (then the highlight fades; the transaction stays expanded). Never opens
-  Edit or the Receipt Viewer directly — those stay behind `⋮`. **The
-  Capture Modal owns this detection while it's open**: it polls its own
-  just-queued `capture_queue` row directly (`GET /api/inbox/[id]`) and
-  reacts the moment its `transactionHeaderId` is set (saved) or it turns
-  `Failed`, rather than closing blind right after upload. A failed
-  capture keeps the Capture Modal open with the real error, Retry,
-  Delete, and Open Capture Inbox — Capture Inbox stays exception-handling
-  only, never the normal path. **Navigation always uses that exact id —
-  never a "latest transaction" lookup** (Fix 6.4.4; the previous
-  vanished-row/`getLatest` heuristic was unreliable). `InboxIndicator`
-  (the global, always-mounted indicator) is the fallback for the same
-  signal whenever the Modal isn't open to see it: whichever of the two
-  pollers reads a row's `transactionHeaderId` first navigates with it and
-  then clears the row (`consumeSavedCapture`, §5) — safe to race, since
-  both would read the same id and a second clear is a no-op. This is a
-  deliberate simplification for a single-user app with normally one
-  capture in flight at a time.
+  auto-expands the new transaction, highlights it for ~3 seconds**
+  (then the highlight fades; the transaction stays expanded), **and
+  automatically opens Edit for it — Post-Save Review (Fix 7.0).** Because
+  the transaction is already saved, Cancel discards nothing (there's
+  nothing to discard) and Save only updates the fields the user actually
+  touched — the existing Edit/UPDATE path, unchanged. Signaled by
+  `?highlight=<id>&edit=1`, set only by post-capture navigation; Dashboard's
+  Recent Transactions and any other plain `?highlight=<id>` link to an
+  existing transaction still only expands and highlights it, never
+  auto-opens Edit. The Receipt Viewer never opens automatically — that
+  stays behind `⋮`. **The Capture Modal owns this detection while it's
+  open**: it polls its own just-queued `capture_queue` row directly
+  (`GET /api/inbox/[id]`) and reacts the moment its `transactionHeaderId`
+  is set (saved) or it turns `Failed`, rather than closing blind right
+  after upload. A failed capture keeps the Capture Modal open with the
+  real error, Retry, Delete, and Open Capture Inbox — Capture Inbox stays
+  exception-handling only, never the normal path. **Navigation always uses
+  that exact id — never a "latest transaction" lookup** (Fix 6.4.4; the
+  previous vanished-row/`getLatest` heuristic was unreliable).
+  `InboxIndicator` (the global, always-mounted indicator) is the fallback
+  for the same signal whenever the Modal isn't open to see it: whichever
+  of the two pollers reads a row's `transactionHeaderId` first navigates
+  (with the same `&edit=1`) and then clears the row (`consumeSavedCapture`,
+  §5) — safe to race, since both would read the same id and a second
+  clear is a no-op. This is a deliberate simplification for a single-user
+  app with normally one capture in flight at a time.
+- **Activity's `?highlight=<id>` deep link always finds its target,
+  regardless of that transaction's own date (Fix 7.0).** Activity's page
+  load normally fetches only a rolling ~366-day window
+  (`getActivityWithHighlight` in `activity.service.ts`); when a
+  `highlightId` is present and falls outside that window — an
+  intentionally old back-dated receipt, or any other reason its
+  `transaction_date` lands outside the range — it is fetched individually
+  and merged in, so post-capture navigation (and any other `?highlight=`
+  link) never silently opens Activity without locating the transaction.
 - **Two distinct dates exist per transaction, and each drives a different,
   non-overlapping part of the app (Fix 6.4.2) — never blend or substitute
   one for the other:**

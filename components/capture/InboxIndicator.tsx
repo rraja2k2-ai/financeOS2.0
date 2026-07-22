@@ -69,7 +69,7 @@ export function InboxIndicator() {
       if (readyToPickUp?.transactionHeaderId) {
         const headerId = readyToPickUp.transactionHeaderId;
         fetch(`/api/inbox/${readyToPickUp.id}/consume`, { method: "POST" }).catch(() => {});
-        router.push(`/activity?highlight=${headerId}`);
+        router.push(`/activity?highlight=${headerId}&edit=1`);
       }
     } catch {
       // Network hiccup — keep the previous state; next poll will correct it.

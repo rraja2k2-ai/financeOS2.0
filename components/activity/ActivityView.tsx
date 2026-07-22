@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
@@ -64,8 +64,14 @@ function categoryIcon(primary: string | null): LucideIcon {
 
 export type ActivityViewProps = {
   transactions: ActivityTransaction[];
-  /** From ?highlight=<id> (Dashboard's Recent Transactions deep link) — auto-expands and scrolls to this transaction. */
+  /** From ?highlight=<id> (Dashboard's Recent Transactions deep link, or post-capture
+   *  navigation) — auto-expands and scrolls to this transaction. */
   highlightId?: string;
+  /** From ?edit=1 (Fix 7.0 Post-Save Review) — set ONLY by post-capture navigation, never
+   *  by Dashboard's Recent Transactions link. When true alongside highlightId, the Edit
+   *  screen opens automatically once, right after the expand/highlight, so the user can
+   *  immediately correct the already-saved transaction. */
+  autoEdit?: boolean;
   /** Powers the (single, reused) Review screen's dropdowns when editing a transaction. */
   masterData: CaptureMasterData;
 };
@@ -130,7 +136,7 @@ function highlight(text: string | null | undefined, query: string) {
   );
 }
 
-export function ActivityView({ transactions, highlightId, masterData }: ActivityViewProps) {
+export function ActivityView({ transactions, highlightId, autoEdit, masterData }: ActivityViewProps) {
   const router = useRouter();
   const highlightedTxn = highlightId ? transactions.find((t) => t.id === highlightId) : undefined;
 
@@ -145,6 +151,10 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
   // The visual highlight fades after ~3s; the transaction stays expanded. Separate from
   // `expanded` itself so re-collapsing never happens automatically — only the emphasis does.
   const [highlightActive, setHighlightActive] = useState(!!highlightId);
+  // Post-Save Review (Fix 7.0): tracks which highlightId auto-edit has already fired for,
+  // so an unrelated re-render (e.g. router.refresh() from an inbox-changed event) never
+  // reopens Edit after the user has closed it. Reset only when highlightId itself changes.
+  const autoEditFiredRef = useRef<string | null>(null);
 
   // Edit & Delete (Fix 3) — the transaction header's own actions, not the line items'.
   const [editLoadingId, setEditLoadingId] = useState<string | null>(null);
@@ -196,6 +206,19 @@ export function ActivityView({ transactions, highlightId, masterData }: Activity
     const timer = setTimeout(() => setHighlightActive(false), 3000);
     return () => clearTimeout(timer);
   }, [highlightId, transactions]);
+
+  // Post-Save Review (Fix 7.0): right after a successful capture, Activity doesn't just
+  // expand and highlight the new transaction — it opens Edit for it automatically too,
+  // since the transaction is already saved and this is purely a fast correction pass, not
+  // a gate. Fires once per highlightId (not on every re-render); Dashboard's Recent
+  // Transactions link never sets autoEdit, so clicking an existing transaction there never
+  // force-opens Edit — only a fresh capture does.
+  useEffect(() => {
+    if (!autoEdit || !highlightId) return;
+    if (autoEditFiredRef.current === highlightId) return;
+    autoEditFiredRef.current = highlightId;
+    handleEdit(highlightId);
+  }, [autoEdit, highlightId]);
 
   useEffect(() => {
     if (!toast) return;
