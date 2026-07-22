@@ -1,5 +1,5 @@
 import { createServerSupabaseClient } from "@/lib/supabase";
-import { getActivity } from "@/services/finance/activity.service";
+import { getActivityWithHighlight } from "@/services/finance/activity.service";
 import { loadCaptureMasterData } from "@/services/capture/master-data.service";
 import { ActivityView } from "@/components/activity/ActivityView";
 import { todayIso } from "@/lib/period";
@@ -21,16 +21,20 @@ function twelveMonthsAgoIso(): string {
 export default async function ActivityPage({
   searchParams,
 }: {
-  searchParams: Promise<{ highlight?: string }>;
+  searchParams: Promise<{ highlight?: string; edit?: string }>;
 }) {
   const supabase = await createServerSupabaseClient();
+  const { highlight, edit } = await searchParams;
   // masterData powers the (single, reused) Review screen's dropdowns when editing a
-  // transaction from Activity — loaded once here, no client-side queries.
+  // transaction from Activity — loaded once here, no client-side queries. Uses
+  // getActivityWithHighlight (Fix 7.0) so a ?highlight=<id> deep link — most importantly
+  // the one post-capture navigation uses — always finds its target regardless of the
+  // transaction's own date, never silently missing it because it falls outside the
+  // default rolling window.
   const [transactions, masterData] = await Promise.all([
-    getActivity(supabase, twelveMonthsAgoIso(), todayIso()),
+    getActivityWithHighlight(supabase, twelveMonthsAgoIso(), todayIso(), highlight),
     loadCaptureMasterData(supabase),
   ]);
-  const { highlight } = await searchParams;
 
-  return <ActivityView transactions={transactions} highlightId={highlight} masterData={masterData} />;
+  return <ActivityView transactions={transactions} highlightId={highlight} autoEdit={edit === "1"} masterData={masterData} />;
 }

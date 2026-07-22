@@ -13,6 +13,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import * as transactionItemRepository from "@/repositories/transaction-item.repository";
+import type { TransactionHeader } from "@/domain/transaction-header";
 import type { TransactionItem } from "@/domain/transaction-item";
 import type { CategorySpend } from "./category-spend.service";
 import { isExpenseTransaction } from "@/lib/expense-filter";
@@ -49,6 +50,42 @@ export type ActivityTransaction = {
   items: ActivityItem[];
 };
 
+/** Shared header+items → ActivityTransaction shaping, used by both getActivity's bulk
+ *  path and getActivityWithHighlight's single-transaction top-up (Fix 7.0) — never
+ *  duplicated between them. */
+function toActivityTransaction(header: TransactionHeader, items: TransactionItem[]): ActivityTransaction {
+  const activityItems: ActivityItem[] = items.map((it) => ({
+    id: it.id,
+    description: it.item_description,
+    qty: it.qty,
+    unitPrice: it.unit_price !== null ? Number(it.unit_price) : null,
+    itemTotal: Number(it.item_total),
+    primaryCategory: it.primary_category,
+    secondaryCategory: it.secondary_category,
+  }));
+
+  return {
+    id: header.id,
+    receiptId: header.receipt_id,
+    merchant: header.merchant,
+    transactionDate: header.transaction_date,
+    capturedAt: header.created_at,
+    currency: header.currency,
+    originalAmount: Number(header.original_amount),
+    sgdAmount: Number(header.sgd_total_amount),
+    primaryCategory: header.primary_category,
+    transactionType: header.transaction_type,
+    currencyGroup: header.currency === "INR" ? "INR" : "SGD",
+    items: activityItems,
+  };
+}
+
+/** Newest-receipt-date-first, same-day ties broken by newest-captured — the one ordering
+ *  rule Activity uses everywhere (CLAUDE.md §7). */
+function byTransactionDateDesc(a: ActivityTransaction, b: ActivityTransaction): number {
+  return b.transactionDate.localeCompare(a.transactionDate) || b.capturedAt.localeCompare(a.capturedAt);
+}
+
 export async function getActivity(
   supabase: SupabaseClient,
   startDate: string,
@@ -69,45 +106,44 @@ export async function getActivity(
     itemsByHeader.get(item.header_id)!.push(item);
   }
 
+  const transactions = headers.map((header) => toActivityTransaction(header, itemsByHeader.get(header.id) ?? []));
+
   // Activity always sorts by the receipt/business date (transaction_date), never by
   // ingestion time — this is the accounting timeline (also used by Budget/Reports/
   // Project allocations), so a receipt captured today for an older expense still lands
-  // under its own date. created_at (capturedAt below) is display-only here. See
-  // CLAUDE.md §7. Same-day headers tiebreak newest-captured-first.
-  const sortedHeaders = [...headers].sort(
-    (a, b) => b.transaction_date.localeCompare(a.transaction_date) || b.created_at.localeCompare(a.created_at)
-  );
+  // under its own date. created_at (capturedAt) is display-only here. See CLAUDE.md §7.
+  return transactions.sort(byTransactionDateDesc);
+}
 
-  const transactions = sortedHeaders.map((header): ActivityTransaction => {
-    const headerItems = itemsByHeader.get(header.id) ?? [];
+/**
+ * Same as getActivity, but GUARANTEES a specific transaction is present in the result
+ * even if its transaction_date falls outside [startDate, endDate] (Fix 7.0) — e.g. a
+ * legitimately old back-dated receipt, or a bad AI-extracted date that would otherwise
+ * silently exclude the very transaction Activity is about to auto-expand and highlight.
+ * Post-capture navigation must be deterministic regardless of the saved date, so the
+ * page always uses this instead of getActivity when a highlightId is present.
+ */
+export async function getActivityWithHighlight(
+  supabase: SupabaseClient,
+  startDate: string,
+  endDate: string,
+  highlightId: string | undefined
+): Promise<ActivityTransaction[]> {
+  const transactions = await getActivity(supabase, startDate, endDate);
+  if (!highlightId || transactions.some((t) => t.id === highlightId)) return transactions;
 
-    const activityItems: ActivityItem[] = headerItems.map((it) => ({
-      id: it.id,
-      description: it.item_description,
-      qty: it.qty,
-      unitPrice: it.unit_price !== null ? Number(it.unit_price) : null,
-      itemTotal: Number(it.item_total),
-      primaryCategory: it.primary_category,
-      secondaryCategory: it.secondary_category,
-    }));
+  let header: TransactionHeader | null;
+  try {
+    header = await transactionHeaderRepository.getById(supabase, highlightId);
+  } catch {
+    // Deleted or never existed (e.g. a race with a manual delete) — nothing to top up;
+    // ActivityView already handles a highlightId with no matching transaction gracefully.
+    return transactions;
+  }
+  if (!header) return transactions;
 
-    return {
-      id: header.id,
-      receiptId: header.receipt_id,
-      merchant: header.merchant,
-      transactionDate: header.transaction_date,
-      capturedAt: header.created_at,
-      currency: header.currency,
-      originalAmount: Number(header.original_amount),
-      sgdAmount: Number(header.sgd_total_amount),
-      primaryCategory: header.primary_category,
-      transactionType: header.transaction_type,
-      currencyGroup: header.currency === "INR" ? "INR" : "SGD",
-      items: activityItems,
-    };
-  });
-
-  return transactions;
+  const items = await transactionItemRepository.listByHeaderId(supabase, header.id);
+  return [...transactions, toActivityTransaction(header, items)].sort(byTransactionDateDesc);
 }
 
 export type RecentTransaction = {

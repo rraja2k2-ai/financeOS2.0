@@ -323,7 +323,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
           setSucceeded(true);
           closeTimerRef.current = setTimeout(() => {
             onClose();
-            router.push(`/activity?highlight=${headerId}`);
+            router.push(`/activity?highlight=${headerId}&edit=1`);
           }, SUCCESS_HOLD_MS);
           return;
         }
