@@ -23,8 +23,8 @@ const OUTPUT_SCHEMA = `{
     "currency": string | null,          // 3-letter code, e.g. "SGD"
     "paymentMethod": string | null,     // as printed or from user context, e.g. "POSB debit card"
     "total": number | null,             // grand total actually paid
-    "tax": number | null,               // only if tax is charged separately on top of item prices
-    "discount": number | null,          // total discount amount, positive number
+    "tax": number | null,               // ONLY if tax is charged separately, on top of item prices already summed — null for a GST/VAT-inclusive receipt
+    "discount": number | null,          // ONLY a whole-receipt discount that can't be attributed to specific items — item-level discounts merge into that item's lineAmount instead, never listed here
     "notes": string | null
   },
   "items": [
@@ -33,7 +33,7 @@ const OUTPUT_SCHEMA = `{
       "qty": number | null,
       "unit": string | null,            // e.g. "kg", "pc", "pack"
       "unitPrice": number | null,
-      "lineAmount": number | null,
+      "lineAmount": number | null,      // NET amount actually paid for this item — merge any item-level discount in here, never a separate item
       "primaryCategory": string | null,
       "secondaryCategory": string | null
     }
@@ -69,7 +69,13 @@ export function buildReceiptProcessingPrompt(
     "  4. A 2-digit year is always the YEAR, never the day, regardless of position — e.g. the trailing \"26\" in \"21/07/26\" is the year 2026, not day 26. Expand a 2-digit year to the 2000s.",
     "  5. If genuinely ambiguous after the above (e.g. \"03/04/26\", where both 3 and 4 could be day or month), keep the day-first default from rule 2.",
     "  Amounts must be plain numbers without currency symbols.",
-    "- Item prices must match what is printed on the receipt. Set header.tax only when tax is charged separately on top of item prices (if item prices already sum to the total, tax is null).",
+    "- Extract the ACTUAL transaction the customer paid for, not a literal transcription of every printed line. A discount/promotion line directly under or attached to ONE item (\"PRICE OFF\", \"DISCOUNT\", \"LESS\", \"SAVE\", \"PROMOTION\", \"MEMBER PRICE\", \"N FOR $X\", \"BUY X GET Y\", \"SPECIAL PRICE\", \"LOYALTY DISCOUNT\", or similar) belongs to THAT item, never a separate item:",
+    "  1. Do not create a separate line item for it. Reduce that item's lineAmount by the discount so it reflects the NET amount actually paid, keep the item's original description, and keep qty as printed — e.g. \"GRANNY SMITH APPLES\" qty 5 at 3.50 followed by \"5 FOR $2.75\" (-0.75) becomes ONE item: description \"Granny Smith Apples\", qty 5, lineAmount 2.75 — never a second \"Discount -0.75\" item.",
+    "  2. Never create a standalone item named \"Discount\", \"Price Off\", \"Promotion\", \"Save\", \"N For\", \"Member Discount\", or similar — these describe how an item's price was reduced, not a thing the customer bought.",
+    "  3. The one exception: a discount applying to the WHOLE receipt/order that cannot reasonably be attributed to one or more specific items (e.g. a final storewide coupon applied after every item is listed) goes in header.discount instead — never merged into an item in that case.",
+    "- header.tax: on a GST/VAT-inclusive receipt (the norm for Singapore and similar groceries), a GST amount printed at the bottom (e.g. \"GST AMT\", \"Price payable includes GST\") is informational only — item prices and the total already include it. Leave header.tax null and do not add it again. Only populate header.tax when tax is charged SEPARATELY on top of the item prices already summed (paying it increases the total beyond the item-price sum).",
+    "- Before finalizing the JSON, verify: sum(items[].lineAmount) + header.tax (if any) + any service charge/shipping (if any) − header.discount (if any, per the receipt-level exception above) equals header.total. If it doesn't reconcile, re-examine which printed lines are item-level discounts (merge them per the rule above) or genuine separate tax/charges, and recompute before returning — never return a result whose parts don't add up to the total.",
+    "- FinanceOS prioritizes accounting accuracy over reproducing the receipt's printed layout: what the customer actually paid for each item, not every intermediate promotional calculation printed on the receipt.",
     "- Categorize every item using ONLY the primary/secondary category pairs listed in CATEGORIES. Use exact names. If nothing fits, use primary \"Miscellaneous\".",
     "- CATEGORIZATION RULES map merchant text to categories: if the merchant matches a rule's pattern (case-insensitive substring), prefer that rule's categories, and its account hint for headerSuggestions.account.",
     "- headerSuggestions.account must be an exact name from ACCOUNTS, or null. headerSuggestions.project must be an exact name from PROJECTS only when the user context or receipt clearly indicates one, else null.",
