@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { isQueueIdWatched } from "@/lib/capture-watch";
 
 /**
  * The ONE small global Capture Inbox indicator (C5). Lives in the app shell, visible
@@ -64,10 +65,14 @@ export function InboxIndicator() {
       }
 
       // Fallback cleanup: a capture finished but nothing has consumed it yet (the Modal
-      // that started it isn't open anymore). Pick one per tick — normally there's only
-      // one capture in flight at a time (CLAUDE.md §7). No navigation — just tidy up the
-      // queue; the user will see it next time they open Activity themselves.
-      const readyToPickUp = items.find((i) => i.transactionHeaderId);
+      // that started it isn't open anymore). Skip any row an open Capture Modal is still
+      // watching (lib/capture-watch.ts) — that Modal's own poll owns consuming it and
+      // showing its success card; racing ahead of it here would delete the row out from
+      // under it, leaving the Modal to close silently instead. Pick one per tick —
+      // normally there's only one capture in flight at a time (CLAUDE.md §7). No
+      // navigation — just tidy up the queue; the user will see it next time they open
+      // Activity themselves.
+      const readyToPickUp = items.find((i) => i.transactionHeaderId && !isQueueIdWatched(i.id));
       if (readyToPickUp) {
         fetch(`/api/inbox/${readyToPickUp.id}/consume`, { method: "POST" }).catch(() => {});
       }

@@ -7,6 +7,7 @@ import { compressImageFile } from "@/components/capture/compress-image";
 import { ProcessingTimeline } from "@/components/capture/ProcessingTimeline";
 import { CaptureSuccessCard, type CaptureSuccessSummary } from "@/components/capture/CaptureSuccessCard";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
+import { watchQueueId, unwatchQueueId } from "@/lib/capture-watch";
 import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
 import type { ReviewedCapture } from "@/services/capture/save-capture.service";
 
@@ -353,6 +354,17 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     const t = setInterval(() => tick((n) => n + 1), 800);
     return () => clearInterval(t);
   }, [queuedAt, succeeded, processingError]);
+
+  // Marks this queue row as "a Modal is open watching it" for as long as this component
+  // has it, so InboxIndicator's fallback poll (a separate, slower interval) never races
+  // ahead and consumes the row before this Modal's own poll gets to see it (see
+  // lib/capture-watch.ts) — otherwise the Modal could find the row already gone and close
+  // silently instead of showing the success card.
+  useEffect(() => {
+    if (!queueId) return;
+    watchQueueId(queueId);
+    return () => unwatchQueueId(queueId);
+  }, [queueId]);
 
   /**
    * Polls the queued item's own status while it's being worked on in the background
