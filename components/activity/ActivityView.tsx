@@ -186,11 +186,21 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
     };
   }, [menuAnchor]);
 
-  // Re-runs on every highlightId change, not just the initial mount — required for the
+  // Re-runs when highlightId itself changes, not on every render — required for the
   // post-capture flow, where a background capture can navigate here (?highlight=<id>)
   // while ActivityView is already mounted (the user was already on this page). Widens
-  // period/group again each time for the same reason the initial state does: the newly
-  // highlighted transaction may fall outside whatever the user currently has selected.
+  // period/group for the same reason the initial state does: the newly highlighted
+  // transaction may fall outside whatever the user currently has selected.
+  //
+  // Deliberately depends on highlightId ONLY, not transactions: the server already
+  // guarantees the highlighted transaction is present in `transactions` on the very
+  // render that introduces a given highlightId (getActivityWithHighlight, Fix 7.0), so
+  // this never needs to "wait and retry" as transactions updates later. If transactions
+  // were a dependency, any later router.refresh() with the same highlightId still in the
+  // URL (e.g. after deleting or editing an unrelated transaction) would re-run this
+  // effect and forcibly re-expand/re-scroll/reset the period — exactly the bug this
+  // fixes: Activity state must only change because of what the user just did, not
+  // because of a stale highlight from earlier in the session.
   useEffect(() => {
     if (!highlightId) return;
     const txn = transactions.find((t) => t.id === highlightId);
@@ -205,7 +215,8 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
     });
     const timer = setTimeout(() => setHighlightActive(false), 3000);
     return () => clearTimeout(timer);
-  }, [highlightId, transactions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- transactions intentionally excluded, see comment above.
+  }, [highlightId]);
 
   // Post-Save Review (Fix 7.0): right after a successful capture, Activity doesn't just
   // expand and highlight the new transaction — it opens Edit for it automatically too,
