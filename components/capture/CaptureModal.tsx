@@ -150,6 +150,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   const [transactionData, setTransactionData] = useState<{ result: CaptureReceiptResult; itemIds: string[] } | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryRetryToken, setSummaryRetryToken] = useState(0);
 
   // Review Transaction — opens the SAME shared Review/Edit screen used everywhere else.
   // masterData is fetched lazily (only when actually requested) since the Capture Modal
@@ -433,12 +434,18 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   // Once saved, load the transaction's own details for the success card — a single fetch
   // reused both for the card's display AND (if the user clicks Review Transaction) as
   // ReviewScreen's own input, so nothing is fetched twice.
+  //
+  // summaryLoading is deliberately NOT a dependency here even though the effect sets it:
+  // this effect is the only writer of that state, so including it would make every
+  // settle (success or failure) toggle a dependency and re-fire the effect — an
+  // unintentional auto-retry loop that never stops on a persistent failure. A manual
+  // retry (summaryRetryToken) is the only thing that should re-trigger a refetch.
   useEffect(() => {
-    if (!succeeded || !savedHeaderId || transactionData || summaryLoading) return;
+    if (!succeeded || !savedHeaderId || transactionData) return;
     let cancelled = false;
     setSummaryLoading(true);
     setSummaryError(null);
-    fetch(`/api/transactions/${savedHeaderId}`)
+    fetch(`/api/transactions/${savedHeaderId}`, { signal: AbortSignal.timeout(20_000) })
       .then(async (res) => ({ ok: res.ok, body: (await res.json().catch(() => null)) as { result?: CaptureReceiptResult; itemIds?: string[]; error?: string } | null }))
       .then(({ ok, body }) => {
         if (cancelled) return;
@@ -449,7 +456,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
         setTransactionData({ result: body.result, itemIds: body.itemIds });
       })
       .catch(() => {
-        if (!cancelled) setSummaryError("Couldn't reach the server.");
+        if (!cancelled) setSummaryError("Couldn't reach the server. Try again.");
       })
       .finally(() => {
         if (!cancelled) setSummaryLoading(false);
@@ -457,7 +464,13 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     return () => {
       cancelled = true;
     };
-  }, [succeeded, savedHeaderId, transactionData, summaryLoading]);
+  }, [succeeded, savedHeaderId, transactionData, summaryRetryToken]);
+
+  /** Manual retry for a failed (or timed-out) summary load — the only thing allowed to re-trigger the fetch above. */
+  function handleRetrySummary() {
+    if (summaryLoading) return;
+    setSummaryRetryToken((n) => n + 1);
+  }
 
   /** Reruns the SAME queued item's background pipeline (no re-upload) — reuses the existing retry endpoint. */
   async function handleRetryProcessing() {
@@ -621,6 +634,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
               summary={cardSummary}
               loading={summaryLoading}
               error={summaryError}
+              onRetry={handleRetrySummary}
               onReview={handleReviewTransaction}
               reviewBusy={masterDataLoading || summaryLoading || !transactionData}
               onDone={handleDone}

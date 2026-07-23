@@ -32,6 +32,7 @@ export function CaptureSuccessCard({
   summary,
   loading,
   error,
+  onRetry,
   onReview,
   reviewBusy,
   onDone,
@@ -40,6 +41,7 @@ export function CaptureSuccessCard({
   summary: CaptureSuccessSummary | null;
   loading: boolean;
   error: string | null;
+  onRetry: () => void;
   onReview: () => void;
   reviewBusy: boolean;
   onDone: () => void;
@@ -67,7 +69,12 @@ export function CaptureSuccessCard({
           {loading ? (
             <div className="p-5 text-center text-[12.5px] text-muted-foreground">Loading details…</div>
           ) : error ? (
-            <div className="p-5 text-center text-[12.5px] text-muted-foreground">{error}</div>
+            <div className="flex flex-col items-center gap-2 p-5 text-center">
+              <p className="text-[12.5px] text-muted-foreground">{error}</p>
+              <button type="button" onClick={onRetry} className="text-[12.5px] font-semibold text-primary">
+                Try Again
+              </button>
+            </div>
           ) : summary ? (
             <div className="divide-y divide-border">
               <SummaryRow label="Merchant" value={summary.merchant ?? "—"} />
