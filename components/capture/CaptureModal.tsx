@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { compressImageFile } from "@/components/capture/compress-image";
+import { ProcessingTimeline } from "@/components/capture/ProcessingTimeline";
+import { CaptureSuccessCard, type CaptureSuccessSummary } from "@/components/capture/CaptureSuccessCard";
+import { ReviewScreen } from "@/components/capture/ReviewScreen";
+import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
+import type { ReviewedCapture } from "@/services/capture/save-capture.service";
 
 /** What the modal hands to its host when the user presses Capture & Process. */
 export type CaptureSubmission = {
@@ -29,24 +34,27 @@ export type CaptureSubmitFn = (
 ) => Promise<{ id: string }>;
 
 /**
- * Premium Capture modal (Fix 6.4A: the Capture screen owns the ENTIRE workflow).
+ * Premium Capture modal — Capture success redesign.
  *
  * Full-screen overlay, NOT a page: it renders above whatever page the user is on. It
- * collects the receipt (pages) + user context, then shows a real, event-driven progress
- * state IN the modal all the way through: Uploading → Preparing → Processing receipt…
- * It stays open and polls its own queued item until the background AI pipeline either
- * succeeds (it then navigates to Activity itself, on the just-created transaction) or
- * fails (it stays open with the real error, Retry, Delete, and Open Capture Inbox). It
- * NEVER closes blind right after the upload — the user always learns the outcome.
+ * collects the receipt (pages) + user context, then shows a real, event-driven vertical
+ * progress timeline all the way through queueing and background AI/Save processing (Fix
+ * 6.4A — it never closes blind right after upload). Once the capture is saved, it shows
+ * a calm success card (thumbnail + key fields) and lets the user choose "Review
+ * Transaction" (opens the SAME shared Review/Edit screen used everywhere else) or "Done"
+ * (just closes — no automatic navigation anywhere). A failed capture keeps using the
+ * existing failure flow (Retry / Delete / Open Capture Inbox), unchanged.
  */
-
-// Brief on-screen confirmation of a finished step (queued / saved) before auto-advancing.
-// This is a success acknowledgement, not a simulated processing delay.
-const SUCCESS_HOLD_MS = 650;
 
 // How often the modal asks "is this capture done yet?" while its own item processes in
 // the background. Real polling of real state, not a simulated timer.
 const PROCESSING_POLL_MS = 2000;
+
+// Purely visual pacing for the timeline's simulated middle steps (Reading/Extracting/
+// Categorizing) — the single Gemini call has no observable sub-stages, so these are
+// honestly-labeled milestones advancing on a schedule, not literal progress (see
+// ProcessingTimeline's own doc comment).
+const SIMULATED_STAGE_MS = 2500;
 
 type ReceiptSource = "camera" | "upload" | "paste";
 
@@ -81,8 +89,27 @@ function releasePages(pages: ReceiptPage[]) {
   }
 }
 
-function phaseText(phase: CaptureProgressPhase): string {
-  return phase === "uploading" ? "Uploading receipt…" : "Preparing AI processing…";
+/** Category with the highest total spend among the saved transaction's items — display
+ *  only, for the success card. Mirrors save-capture.service.ts's dominantCategory concept
+ *  (same idea: highest-spend category wins) without importing that server-only module
+ *  (it pulls in repositories/exchange-rate code not meant for a client bundle) — this
+ *  operates on CaptureReceiptResult["items"], a different shape, purely for display. */
+function dominantCategoryFromItems(items: CaptureReceiptResult["items"]): string | null {
+  const byCategory = new Map<string, number>();
+  for (const item of items) {
+    const cat = item.primaryCategory?.trim();
+    if (!cat) continue;
+    byCategory.set(cat, (byCategory.get(cat) ?? 0) + (item.lineAmount ?? 0));
+  }
+  let best: string | null = null;
+  let bestAmount = -Infinity;
+  for (const [cat, amount] of byCategory) {
+    if (amount > bestAmount) {
+      best = cat;
+      bestAmount = amount;
+    }
+  }
+  return best;
 }
 
 export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: CaptureSubmitFn }) {
@@ -93,12 +120,10 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   const [pendingReceipt, setPendingReceipt] = useState<Receipt | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Submission lifecycle (Fix 6.4A): submitting stays true from "Uploading…" all the way
-  // through "Processing receipt…" — the modal doesn't hand off to the background until
-  // the capture is actually done.
+  // Submission lifecycle: submitting stays true from "Uploading…" all the way through
+  // background processing — the modal doesn't hand off blind until the capture is
+  // actually done (Fix 6.4A).
   const [submitting, setSubmitting] = useState(false);
-  const [succeeded, setSucceeded] = useState(false);
-  const [statusText, setStatusText] = useState("Uploading receipt…");
   // Hard failure to even enqueue the capture (network/validation) — the form stays
   // editable and Retry re-submits fresh. Distinct from processingError below.
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -109,10 +134,33 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
 
+  // Timeline pacing: hadFiles/uploadDone drive step 1 (a real signal); queuedAt anchors
+  // the elapsed-time-based simulated steps 2-4; tick forces a re-render so the elapsed
+  // time is re-evaluated periodically (mirrors InboxView's own ProgressLine component).
+  const [hadFiles, setHadFiles] = useState(false);
+  const [uploadDone, setUploadDone] = useState(false);
+  const [queuedAt, setQueuedAt] = useState<number | null>(null);
+  const [, tick] = useState(0);
+
+  // Success — the capture is saved. No auto-close, no auto-navigation: the user chooses
+  // Review Transaction or Done (Capture success redesign).
+  const [succeeded, setSucceeded] = useState(false);
+  const [savedHeaderId, setSavedHeaderId] = useState<string | null>(null);
+  const [transactionData, setTransactionData] = useState<{ result: CaptureReceiptResult; itemIds: string[] } | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  // Review Transaction — opens the SAME shared Review/Edit screen used everywhere else.
+  // masterData is fetched lazily (only when actually requested) since the Capture Modal
+  // is mounted globally, outside any page that already loaded it server-side.
+  const [reviewing, setReviewing] = useState(false);
+  const [masterData, setMasterData] = useState<CaptureMasterData | null>(null);
+  const [masterDataLoading, setMasterDataLoading] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep latest state in refs so the unmount-only cleanup below can release object URLs
@@ -126,20 +174,22 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     return () => {
       releasePages(receiptRef.current?.pages ?? []);
       releasePages(pendingRef.current?.pages ?? []);
-      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, []);
 
-  // Closing is blocked while queueing/processing/succeeding (Fix 6.4A: the screen must
-  // remain visible until Success or Failure) — the user can't accidentally abandon a
-  // capture partway through. Once processing has actually FAILED, closing is allowed
-  // again — the Failed row stays safely in the Capture Inbox for later.
-  const isBusy = submitting || succeeded;
+  // Closing is blocked only while actually queueing/processing (Fix 6.4A: the screen
+  // must remain visible until Success or Failure) — once either is showing, the user can
+  // dismiss freely (the transaction is already saved, or safely parked in the Inbox).
+  const isBusy = submitting;
   const requestClose = useCallback(() => {
     if (isBusy) return;
+    if (reviewing) {
+      setReviewing(false);
+      return;
+    }
     onClose();
-  }, [isBusy, onClose]);
+  }, [isBusy, reviewing, onClose]);
 
   // Escape closes (unless busy); body scroll is locked while the overlay is open.
   useEffect(() => {
@@ -265,7 +315,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   /**
    * Capture & Process: queue the capture, narrating real progress inside the modal, then
    * hand off to the polling effect below to track the SAME item's background processing
-   * — the modal stays open and showing "Processing receipt…" until that resolves.
+   * — the modal stays open and showing the processing timeline until that resolves.
    */
   async function handleCapture() {
     if (!canCapture || isBusy) return;
@@ -278,12 +328,16 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     setSubmitError(null);
     setProcessingError(null);
     setSubmitting(true);
-    setStatusText(submission.files.length > 0 ? "Uploading receipt…" : "Preparing AI processing…");
+    setHadFiles(submission.files.length > 0);
+    setUploadDone(submission.files.length === 0);
 
     try {
-      const { id } = await onSubmit(submission, (phase) => setStatusText(phaseText(phase)));
+      const { id } = await onSubmit(submission, (phase) => {
+        if (phase === "preparing") setUploadDone(true);
+      });
       // Queued successfully — the polling effect takes over from here.
-      setStatusText("Processing receipt…");
+      setUploadDone(true);
+      setQueuedAt(Date.now());
       setQueueId(id);
     } catch (err) {
       setSubmitting(false);
@@ -291,16 +345,25 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     }
   }
 
+  // Advances the timeline's simulated middle steps by forcing a re-render on a schedule
+  // while a capture is genuinely queued and processing — purely visual pacing, see
+  // SIMULATED_STAGE_MS above.
+  useEffect(() => {
+    if (!queuedAt || succeeded || processingError) return;
+    const t = setInterval(() => tick((n) => n + 1), 800);
+    return () => clearInterval(t);
+  }, [queuedAt, succeeded, processingError]);
+
   /**
    * Polls the queued item's own status while it's being worked on in the background
    * (Fix 6.4A). Runs whenever there's a queue id and we're not already past processing —
    * this also covers "Retry", which just clears processingError and lets this effect
    * pick the same item back up.
    *
-   * Fix 6.4.4: success is `transactionHeaderId` being set on THIS item — the exact id
-   * processQueueItem's Save step just created — never a "latest transaction" guess. That
-   * makes the success branch a single synchronous step (no async gap after setSucceeded),
-   * so there's nothing left to race against the effect's own cleanup.
+   * Success is `transactionHeaderId` being set on THIS item — the exact id
+   * processQueueItem's Save step just created — never a "latest transaction" guess.
+   * Capture success redesign: on success this no longer auto-closes or navigates
+   * anywhere — it just flips to the success card; the user decides what happens next.
    */
   useEffect(() => {
     if (!queueId || succeeded || processingError) return;
@@ -319,12 +382,9 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
           const headerId = item.transactionHeaderId;
           window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
           fetch(`/api/inbox/${queueId}/consume`, { method: "POST" }).catch(() => {});
-          setStatusText("Transaction saved!");
+          setSavedHeaderId(headerId);
           setSucceeded(true);
-          closeTimerRef.current = setTimeout(() => {
-            onClose();
-            router.push(`/activity?highlight=${headerId}&edit=1`);
-          }, SUCCESS_HOLD_MS);
+          setSubmitting(false);
           return;
         }
 
@@ -338,8 +398,8 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
         if (!item) {
           // Gone without us ever seeing a transactionHeaderId — the global Inbox
           // indicator (or a manual delete from the Inbox page) must have already
-          // consumed it. We never guess an id here (Fix 6.4.4) — just close quietly;
-          // whichever consumer got there first already navigated correctly.
+          // consumed it. We never guess an id here — just close quietly; whichever
+          // consumer got there first already handled it.
           onClose();
           return;
         }
@@ -356,7 +416,36 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
       cancelled = true;
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
-  }, [queueId, succeeded, processingError, onClose, router]);
+  }, [queueId, succeeded, processingError, onClose]);
+
+  // Once saved, load the transaction's own details for the success card — a single fetch
+  // reused both for the card's display AND (if the user clicks Review Transaction) as
+  // ReviewScreen's own input, so nothing is fetched twice.
+  useEffect(() => {
+    if (!succeeded || !savedHeaderId || transactionData || summaryLoading) return;
+    let cancelled = false;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    fetch(`/api/transactions/${savedHeaderId}`)
+      .then(async (res) => ({ ok: res.ok, body: (await res.json().catch(() => null)) as { result?: CaptureReceiptResult; itemIds?: string[]; error?: string } | null }))
+      .then(({ ok, body }) => {
+        if (cancelled) return;
+        if (!ok || !body?.result || !body?.itemIds) {
+          setSummaryError(body?.error ?? "Couldn't load the transaction's details.");
+          return;
+        }
+        setTransactionData({ result: body.result, itemIds: body.itemIds });
+      })
+      .catch(() => {
+        if (!cancelled) setSummaryError("Couldn't reach the server.");
+      })
+      .finally(() => {
+        if (!cancelled) setSummaryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [succeeded, savedHeaderId, transactionData, summaryLoading]);
 
   /** Reruns the SAME queued item's background pipeline (no re-upload) — reuses the existing retry endpoint. */
   async function handleRetryProcessing() {
@@ -371,7 +460,8 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
       }
       window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
       setSubmitting(true);
-      setStatusText("Processing receipt…");
+      setUploadDone(true);
+      setQueuedAt(Date.now());
       setProcessingError(null);
     } catch {
       setProcessingError("Couldn't reach the server. Please try again.");
@@ -406,12 +496,89 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     router.push("/inbox");
   }
 
+  /** Loads master data (once, lazily) and opens the SAME shared Review/Edit screen on the just-saved transaction. */
+  async function handleReviewTransaction() {
+    if (masterDataLoading || summaryLoading || !transactionData) return;
+    setReviewError(null);
+    if (masterData) {
+      setReviewing(true);
+      return;
+    }
+    setMasterDataLoading(true);
+    try {
+      const res = await fetch("/api/capture/master-data");
+      const body = (await res.json().catch(() => null)) as { masterData?: CaptureMasterData; error?: string } | null;
+      if (!res.ok || !body?.masterData) {
+        setReviewError(body?.error ?? "Couldn't open Review. Try again.");
+        return;
+      }
+      setMasterData(body.masterData);
+      setReviewing(true);
+    } catch {
+      setReviewError("Couldn't reach the server. Try again.");
+    } finally {
+      setMasterDataLoading(false);
+    }
+  }
+
+  /** Saves Review edits back onto the SAME transaction (UPDATE, never a new one), then closes — same Edit/UPDATE path as Activity's own Edit. */
+  async function handleReviewSave(reviewed: ReviewedCapture) {
+    if (!savedHeaderId || !transactionData) return;
+    const res = await fetch(`/api/transactions/${savedHeaderId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviewed, itemIds: transactionData.itemIds }),
+      signal: AbortSignal.timeout(60_000),
+    }).catch(() => null);
+
+    const body = res ? ((await res.json().catch(() => null)) as { updated?: boolean; error?: string } | null) : null;
+    if (!res || !res.ok || !body?.updated) {
+      throw new Error(body?.error ?? "Couldn't save changes. Your edits are safe — please try again.");
+    }
+
+    window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+    onClose();
+  }
+
+  /** No automatic navigation anywhere — just closes, returning the user to whatever screen they were already on. */
+  function handleDone() {
+    onClose();
+  }
+
+  const completedSteps = !uploadDone ? 0 : !queuedAt ? 1 : 1 + Math.min(3, Math.floor((Date.now() - queuedAt) / SIMULATED_STAGE_MS));
+
+  const cardSummary: CaptureSuccessSummary | null = transactionData
+    ? {
+        merchant: transactionData.result.header.merchant,
+        currency: transactionData.result.header.currency,
+        total: transactionData.result.header.total,
+        itemCount: transactionData.result.items.length,
+        transactionDate: transactionData.result.header.transactionDate,
+        account: transactionData.result.headerSuggestions.account,
+        category: dominantCategoryFromItems(transactionData.result.items),
+      }
+    : null;
+
+  // Review Transaction — the SAME shared Review/Edit screen used everywhere else,
+  // rendered on its own (not nested inside this modal's shell) so there's exactly one
+  // dialog and one Escape listener active at a time.
+  if (reviewing && transactionData && masterData) {
+    return (
+      <ReviewScreen
+        result={transactionData.result}
+        masterData={masterData}
+        onCancel={() => setReviewing(false)}
+        onSave={handleReviewSave}
+      />
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-[60] overflow-y-auto bg-background" role="dialog" aria-modal="true" aria-label="New Capture">
       <div className="mx-auto flex min-h-full max-w-[480px] flex-col px-5 pb-8 pt-5">
         {/* Header */}
         <div className="mb-5 flex items-center justify-between">
-          <h1 className="text-[22px] font-bold tracking-tight">New Capture</h1>
+          <h1 className="text-[22px] font-bold tracking-tight">{succeeded ? "Capture" : "New Capture"}</h1>
           <button
             type="button"
             onClick={requestClose}
@@ -426,7 +593,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
         </div>
 
         {isBusy ? (
-          <ProcessingView statusText={statusText} succeeded={succeeded} />
+          <ProcessingTimeline hasReceipt={hadFiles} completedSteps={completedSteps} />
         ) : processingError ? (
           <ProcessingFailedView
             message={processingError}
@@ -435,6 +602,19 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
             onDelete={handleDeleteFailedCapture}
             onOpenInbox={handleOpenInbox}
           />
+        ) : succeeded ? (
+          <>
+            <CaptureSuccessCard
+              thumbnailUrl={receipt?.pages[0]?.previewUrl ?? null}
+              summary={cardSummary}
+              loading={summaryLoading}
+              error={summaryError}
+              onReview={handleReviewTransaction}
+              reviewBusy={masterDataLoading || summaryLoading || !transactionData}
+              onDone={handleDone}
+            />
+            {reviewError && <p className="mt-1 text-center text-[12px] font-semibold text-destructive">{reviewError}</p>}
+          </>
         ) : (
           <>
             {/* AI context — the primary element */}
@@ -572,32 +752,11 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   );
 }
 
-/** In-modal processing state — a real status message, no fake percentages, no artificial delays. */
-function ProcessingView({ statusText, succeeded }: { statusText: string; succeeded: boolean }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center py-16 text-center" role="status" aria-live="polite">
-      {succeeded ? (
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/15 text-primary">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 6 9 17l-5-5" />
-          </svg>
-        </div>
-      ) : (
-        <svg width="40" height="40" viewBox="0 0 24 24" className="animate-spin text-primary" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-          <path d="M12 3a9 9 0 1 0 9 9" />
-        </svg>
-      )}
-      <p className={cn("mt-4 text-[14.5px] font-semibold", succeeded && "text-primary")}>{statusText}</p>
-      {!succeeded && <p className="mt-1 text-[12px] text-muted-foreground">This only takes a moment — hang tight.</p>}
-    </div>
-  );
-}
-
 /**
  * Shown when the BACKGROUND processing of an already-queued capture fails (the AI call or
  * the save itself threw) — as opposed to failing to queue at all (see submitError above).
  * The receipt and context are safe in the Capture Inbox; this is exception handling, not
- * the normal path (CLAUDE.md §5/§7).
+ * the normal path (CLAUDE.md §5/§7). Unchanged by the Capture success redesign.
  */
 function ProcessingFailedView({
   message,

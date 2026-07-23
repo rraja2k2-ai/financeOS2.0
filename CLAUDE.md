@@ -29,10 +29,12 @@ project, and monitor accounts and investments.
   between "correct for a multi-user SaaS" and "correct for one household's
   books," choose the latter.
 - The product's core loop is: capture a receipt (photo or text) → AI
-  extracts structured data → transaction is saved immediately → Activity
-  opens with it expanded, highlighted, and already in Edit for a quick
-  correction pass (Post-Save Review). Review never gates the save — it
-  only ever happens after the transaction already exists — see §5/§7.
+  extracts structured data → transaction is saved immediately → the
+  Capture screen itself shows a calm success card (thumbnail + key
+  fields) and the user chooses **Review Transaction** or **Done** — there
+  is no automatic navigation anywhere. Review never gates the save — it
+  only ever happens after the transaction already exists, and only if the
+  user asks for it — see §5/§7.
 
 ---
 
@@ -183,15 +185,17 @@ Refresh Activity
 1. **Capture Launcher** — entry point UI that starts a capture (photo,
    file, or text-only).
 2. **Capture Modal** — collects the receipt page(s) and free-text user
-   context, shows real upload/processing progress (no simulated timers),
+   context, shows a real vertical progress timeline (no generic spinners,
+   no simulated timers for the steps a real signal exists for — see §7),
    and **owns its own capture end-to-end**: it stays open through
    uploading, queueing, and the background AI/Save run, polling the queue
-   row it just created. On success it navigates to Activity itself
-   (auto-expand + highlight, see §7); on failure — enqueue failure or a
-   background AI/Save failure — it stays open with the real error, a
-   Retry, a Delete, and an "Open Capture Inbox" escape hatch, so an
-   uploaded receipt is never lost and the user is never left not knowing
-   what happened.
+   row it just created. On success it shows a calm success card in place
+   — see §7's Capture success experience — and **never navigates
+   anywhere on its own**; on failure — enqueue failure or a background
+   AI/Save failure — it stays open with the real error, a Retry, a
+   Delete, and an "Open Capture Inbox" escape hatch, so an uploaded
+   receipt is never lost and the user is never left not knowing what
+   happened.
 3. **Capture Inbox** (`capture_queue`) — an async work queue. A capture
    enqueues immediately (status `Processing`) and processes in the
    background; the user is never blocked waiting on the AI call.
@@ -205,12 +209,15 @@ Refresh Activity
 6. **Record the exact id, then delete the queue row** — the moment the
    save succeeds, `capture_queue.transaction_header_id` is set to the
    EXACT `transaction_headers.id` just created (status stays `Processing`
-   — no new status value). Whichever poller reads it first (the Capture
-   Modal, or `InboxIndicator` as a fallback — see §7) navigates using that
-   exact id and then deletes the row (`consumeSavedCapture`, metadata-only
-   — never touches Storage). The queue never holds a **visible** "Saved"
-   row (no new status, and the id-bearing window is momentary); the
-   transaction in Activity **is** the record from that point on.
+   — no new status value). The Capture Modal reads this id to fetch the
+   saved transaction's summary for its own success card (see §7) — it does
+   **not** navigate anywhere. Whichever poller reads the id first (the
+   Capture Modal, or `InboxIndicator` as a fallback whenever the Modal
+   isn't open — see §7) consumes the row (`consumeSavedCapture`,
+   metadata-only — never touches Storage). The queue never holds a
+   **visible** "Saved" row (no new status, and the id-bearing window is
+   momentary); the transaction in Activity **is** the record from that
+   point on.
 7. **Refresh Activity** — the saved transaction appears automatically,
    newest first; see §7.
 
@@ -275,58 +282,64 @@ reused for the whole session — no repeated queries mid-session.
   optimize for speed of repeated use over guided hand-holding.
 - **Review never gates the save.** A successful AI result is saved
   immediately, with no manual approval step before persistence — Review
-  only ever happens after the transaction already exists, either as
-  Post-Save Review right after a capture, or manually later (below).
-- **One Review Screen, reused — now Edit-only, opened either by hand or
-  automatically.** The same Review Screen component that once gated every
-  capture now only edits an already-saved transaction — whether opened
-  manually via Activity's `⋮ → Edit`, or automatically right after a fresh
-  capture (Post-Save Review, below). There is no second editor anywhere in
-  the app. Any future "edit" surface must route through this one
-  component, reshaping existing data to look like a fresh AI result rather
-  than building a parallel form.
+  only ever happens after the transaction already exists, and only if the
+  user explicitly asks for it (the Capture success card's **Review
+  Transaction** button, below, or manually later via Activity).
+- **One Review Screen, reused — Edit-only, opened only by hand.** The same
+  Review Screen component that once gated every capture now only edits an
+  already-saved transaction — whether opened from Activity's `⋮ → Edit`,
+  or from the Capture success card's **Review Transaction** button right
+  after a fresh capture. There is no second editor anywhere in the app.
+  Any future "edit" surface must route through this one component,
+  reshaping existing data to look like a fresh AI result rather than
+  building a parallel form.
 - **Activity is the source of truth** for what has been saved. Once a
   transaction is saved, Activity is where it lives, is displayed, is edited,
   viewed (its original receipt), and is deleted from — not a second
   parallel transaction list. Activity refreshes itself automatically when a
   background capture finishes, newest transaction first — the user is never
   required to manually reload to see it.
-- **After a successful capture, the app navigates the user to Activity,
-  auto-expands the new transaction, highlights it for ~3 seconds**
-  (then the highlight fades; the transaction stays expanded), **and
-  automatically opens Edit for it — Post-Save Review (Fix 7.0).** Because
-  the transaction is already saved, Cancel discards nothing (there's
-  nothing to discard) and Save only updates the fields the user actually
-  touched — the existing Edit/UPDATE path, unchanged. Signaled by
-  `?highlight=<id>&edit=1`, set only by post-capture navigation; Dashboard's
-  Recent Transactions and any other plain `?highlight=<id>` link to an
-  existing transaction still only expands and highlights it, never
-  auto-opens Edit. The Receipt Viewer never opens automatically — that
-  stays behind `⋮`. **The Capture Modal owns this detection while it's
-  open**: it polls its own just-queued `capture_queue` row directly
+- **Capture success experience — no automatic navigation, ever.** The
+  Capture Modal owns detecting its own capture finishing while it's open:
+  it polls its own just-queued `capture_queue` row directly
   (`GET /api/inbox/[id]`) and reacts the moment its `transactionHeaderId`
-  is set (saved) or it turns `Failed`, rather than closing blind right
-  after upload. A failed capture keeps the Capture Modal open with the
+  is set (saved) or it turns `Failed`. While queued/processing it shows a
+  vertical progress timeline (receipt thumbnail + steps — Receipt
+  Uploaded/Context Received, Reading Receipt, Extracting Items,
+  Categorizing, Saving Transaction) rather than a generic spinner. On
+  success — **in place, without navigating anywhere** — it replaces the
+  timeline with a calm success card (thumbnail, Merchant, Total Amount,
+  Items, Receipt Date, Account, Category) and exactly two actions: **Review
+  Transaction** (fetches master data and opens the one shared Review
+  Screen, in Edit mode, on top of the Modal) and **Done** (closes the
+  Modal, no navigation — the user stays exactly where they were). Saving
+  from Review, or Done, both simply close back out; there is nothing to
+  discard either way since the transaction was already saved before this
+  screen ever appeared. A failed capture keeps the Modal open with the
   real error, Retry, Delete, and Open Capture Inbox — Capture Inbox stays
-  exception-handling only, never the normal path. **Navigation always uses
-  that exact id — never a "latest transaction" lookup** (Fix 6.4.4; the
-  previous vanished-row/`getLatest` heuristic was unreliable).
-  `InboxIndicator` (the global, always-mounted indicator) is the fallback
-  for the same signal whenever the Modal isn't open to see it: whichever
-  of the two pollers reads a row's `transactionHeaderId` first navigates
-  (with the same `&edit=1`) and then clears the row (`consumeSavedCapture`,
-  §5) — safe to race, since both would read the same id and a second
-  clear is a no-op. This is a deliberate simplification for a single-user
-  app with normally one capture in flight at a time.
+  exception-handling only, never the normal path. `InboxIndicator` (the
+  global, always-mounted indicator) is the fallback for the same
+  `transactionHeaderId` signal whenever the Modal isn't open to see it
+  (e.g. the user navigated away mid-processing): it consumes the row
+  (`consumeSavedCapture`, §5) so the queue doesn't linger, but — like the
+  Modal — it **never navigates**; the user finds the transaction in
+  Activity on their own. A reusable `ConfidenceBadge` component
+  ("Needs Review" / "Review Recommended") exists for the success card but
+  is intentionally unwired — no confidence-scoring logic exists yet
+  anywhere in the app; wiring it to a real signal is future work.
 - **Activity's `?highlight=<id>` deep link always finds its target,
-  regardless of that transaction's own date (Fix 7.0).** Activity's page
-  load normally fetches only a rolling ~366-day window
+  regardless of that transaction's own date.** Activity's page load
+  normally fetches only a rolling ~366-day window
   (`getActivityWithHighlight` in `activity.service.ts`); when a
   `highlightId` is present and falls outside that window — an
   intentionally old back-dated receipt, or any other reason its
   `transaction_date` lands outside the range — it is fetched individually
-  and merged in, so post-capture navigation (and any other `?highlight=`
-  link) never silently opens Activity without locating the transaction.
+  and merged in, so a `?highlight=` link (e.g. from Dashboard's Recent
+  Transactions) never silently opens Activity without locating the
+  transaction. Activity also still supports an optional `&edit=1` to
+  auto-open Edit on the highlighted transaction, but nothing in the app
+  generates that combination automatically anymore — it would only be
+  used by a future deliberate deep link.
 - **Two distinct dates exist per transaction, and each drives a different,
   non-overlapping part of the app (Fix 6.4.2) — never blend or substitute
   one for the other:**
@@ -448,6 +461,8 @@ transaction system of record, RLS with granular per-verb policies.
   CRUD policies standardized, obsolete `app_settings` table removed).
 - Auto Save (a successful AI result is saved immediately, no manual Review
   step, no eligibility/confidence gating — see §5/§7).
+- Capture success experience (progress timeline + success card, Review
+  Transaction / Done choice, no automatic navigation — see §7).
 
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.
