@@ -56,6 +56,7 @@ import { getActiveCaptureProviderName } from "@/services/ai/providers";
 import { friendlyCaptureError, type CaptureDocumentPage } from "@/services/ai/ai-provider";
 import type { CaptureQueueItem, CaptureQueuePage, CaptureQueueStatus, CaptureSourceKind } from "@/domain/capture-queue";
 import { receiptFolder, extForMime } from "./receipt-path";
+import { createStageTimer, type StageTimer } from "@/lib/perf-timer";
 
 /**
  * Background work (inside after()) runs outside a request, where the cookie-bound server
@@ -66,36 +67,48 @@ export function createBackgroundSupabaseClient(): SupabaseClient {
   return createClient(url, anonKey);
 }
 
-/** Uploads the pages and creates the queue row. On any failure nothing is left behind. */
+/**
+ * Uploads the pages and creates the queue row. On any failure nothing is left behind.
+ *
+ * `timer` (performance profiling pass): optional so this stays a plain, callable service
+ * function for anything that doesn't care about timing (e.g. the legacy /api/capture/*
+ * routes, tests) — when the caller passes one (the live /api/inbox route does), these two
+ * stages land in that SAME shared report alongside processQueueItem's stages.
+ */
 export async function enqueueCapture(
   supabase: SupabaseClient,
-  input: { userContext: string; pages: CaptureDocumentPage[]; source: CaptureSourceKind }
+  input: { userContext: string; pages: CaptureDocumentPage[]; source: CaptureSourceKind },
+  timer: StageTimer = createStageTimer()
 ): Promise<CaptureQueueItem> {
   const folder = receiptFolder();
 
   const queuePages: CaptureQueuePage[] = [];
   try {
-    for (let i = 0; i < input.pages.length; i++) {
-      const page = input.pages[i];
-      const pageNo = i + 1;
-      const path = `${folder}/page-${pageNo}${extForMime(page.mimeType)}`;
-      const bytes = Buffer.from(page.dataBase64, "base64");
-      const uploaded = await receiptStorageRepository.uploadReceiptPage(supabase, path, bytes, page.mimeType);
-      queuePages.push({ ...uploaded, pageNo });
-    }
-
-    return await captureQueueRepository.insert(supabase, {
-      status: "Processing",
-      user_context: input.userContext,
-      pages: queuePages,
-      result_json: null,
-      error_message: null,
-      merchant: null,
-      capture_source: input.source,
-      ai_provider: null,
-      transaction_header_id: null,
-      retry_count: 0,
+    await timer.time(`Image Upload to Storage (${input.pages.length} page${input.pages.length === 1 ? "" : "s"})`, async () => {
+      for (let i = 0; i < input.pages.length; i++) {
+        const page = input.pages[i];
+        const pageNo = i + 1;
+        const path = `${folder}/page-${pageNo}${extForMime(page.mimeType)}`;
+        const bytes = Buffer.from(page.dataBase64, "base64");
+        const uploaded = await receiptStorageRepository.uploadReceiptPage(supabase, path, bytes, page.mimeType);
+        queuePages.push({ ...uploaded, pageNo });
+      }
     });
+
+    return await timer.time("Queue Row Insert", () =>
+      captureQueueRepository.insert(supabase, {
+        status: "Processing",
+        user_context: input.userContext,
+        pages: queuePages,
+        result_json: null,
+        error_message: null,
+        merchant: null,
+        capture_source: input.source,
+        ai_provider: null,
+        transaction_header_id: null,
+        retry_count: 0,
+      })
+    );
   } catch (err) {
     await receiptStorageRepository.removeReceiptPages(supabase, queuePages.map((p) => p.storagePath)).catch(() => {});
     throw err;
@@ -112,12 +125,12 @@ export async function enqueueCapture(
  * or the save itself), the item becomes Failed with a friendly message so the receipt is
  * never lost and the user can retry.
  */
-export async function processQueueItem(queueId: string): Promise<void> {
+export async function processQueueItem(queueId: string, timer: StageTimer = createStageTimer()): Promise<void> {
   const supabase = createBackgroundSupabaseClient();
 
   let row: CaptureQueueItem | null = null;
   try {
-    row = await captureQueueRepository.getById(supabase, queueId);
+    row = await timer.time("Queue Row Fetch", () => captureQueueRepository.getById(supabase, queueId));
   } catch (err) {
     console.error(`[inbox] could not load queue item ${queueId}:`, err);
     return;
@@ -125,28 +138,41 @@ export async function processQueueItem(queueId: string): Promise<void> {
   if (!row) return; // deleted while queued — nothing to do
 
   try {
-    const pages = await downloadQueuePages(supabase, row.pages);
-    const masterData = await loadCaptureMasterData(supabase);
-    const result = await processCapture({ userContext: row.user_context, pages, masterData });
+    // Note: pages were already uploaded to Storage during enqueue (see enqueueCapture's
+    // "Image Upload to Storage" stage) — this downloads them back for the AI call, a real
+    // and separately-measurable round trip, not the same work repeated.
+    const pages = await timer.time("Receipt Page Download (Storage → AI input)", () => downloadQueuePages(supabase, row!.pages));
+    const masterData = await timer.time("Master Data Load (accounts/projects/rules/currency)", () => loadCaptureMasterData(supabase));
+    const result = await processCapture({ userContext: row.user_context, pages, masterData }, timer);
 
-    const { headerId } = await saveReviewedCapture(supabase, {
-      reviewed: reviewedFromResult(result),
-      aiContext: row.user_context,
-      pages: [],
-      preUploadedPages: [...row.pages]
-        .sort((a, b) => a.pageNo - b.pageNo)
-        .map((p) => ({ storagePath: p.storagePath, mimeType: p.mimeType, fileSizeBytes: p.fileSizeBytes })),
-      audit: { aiProvider: getActiveCaptureProviderName(), processedAt: row.updated_at, captureSource: row.capture_source },
-    });
+    const { headerId } = await saveReviewedCapture(
+      supabase,
+      {
+        reviewed: reviewedFromResult(result),
+        aiContext: row.user_context,
+        pages: [],
+        preUploadedPages: [...row.pages]
+          .sort((a, b) => a.pageNo - b.pageNo)
+          .map((p) => ({ storagePath: p.storagePath, mimeType: p.mimeType, fileSizeBytes: p.fileSizeBytes })),
+        audit: { aiProvider: getActiveCaptureProviderName(), processedAt: row.updated_at, captureSource: row.capture_source },
+      },
+      timer
+    );
 
     // Saved — record the EXACT transaction_header.id this capture became (Fix 6.4.4), so
     // navigation never has to guess via "latest transaction." Status stays Processing (no
     // new status value written — CLAUDE.md §5); the row itself is removed by whichever
     // poller reads this id first, via consumeSavedCapture().
-    await captureQueueRepository.update(supabase, queueId, { transaction_header_id: headerId });
+    await timer.time("Queue Row Update (transaction_header_id)", () =>
+      captureQueueRepository.update(supabase, queueId, { transaction_header_id: headerId })
+    );
 
+    const revalStart = performance.now();
     revalidatePath("/activity");
     revalidatePath("/");
+    timer.mark("Revalidate Paths (activity, dashboard)", performance.now() - revalStart);
+
+    timer.report(`[capture:${queueId}] Pipeline timing (saved)`);
   } catch (err) {
     console.error(`[inbox] processing failed for ${queueId}:`, err);
     // Re-fetch: retry_count may have changed since we first loaded the row (e.g. a
@@ -161,6 +187,7 @@ export async function processQueueItem(queueId: string): Promise<void> {
     await captureQueueRepository
       .update(supabase, queueId, { status: "Failed", error_message: message, retry_count: nextRetryCount })
       .catch(() => {});
+    timer.report(`[capture:${queueId}] Pipeline timing (failed: ${message})`);
   }
 }
 

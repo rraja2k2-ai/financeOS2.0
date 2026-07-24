@@ -12,11 +12,21 @@
  */
 import { getCaptureAiProvider } from "@/services/ai/providers";
 import { CaptureAiError, type CaptureProcessingInput, type CaptureReceiptResult } from "@/services/ai/ai-provider";
+import { createStageTimer, type StageTimer } from "@/lib/perf-timer";
 
-export async function processCapture(input: CaptureProcessingInput): Promise<CaptureReceiptResult> {
+/**
+ * `timer` (performance profiling pass, optional): `provider.processReceipt()` is one
+ * request/response round trip PLUS the provider's own internal JSON.parse — that finer
+ * split can't be measured from here without threading an app-specific type across the
+ * provider-agnostic boundary (CLAUDE.md §6: "provider abstraction is absolute"), so this
+ * records the whole call as one stage. GeminiCaptureProvider additionally logs its own
+ * internal request-vs-parse breakdown separately (console.log, self-contained) for the
+ * cases that need that finer detail.
+ */
+export async function processCapture(input: CaptureProcessingInput, timer: StageTimer = createStageTimer()): Promise<CaptureReceiptResult> {
   const provider = getCaptureAiProvider();
-  const raw = await provider.processReceipt(input);
-  return normalizeReceiptResult(raw);
+  const raw = await timer.time(`Gemini Processing — request + response + internal JSON parse (${provider.name})`, () => provider.processReceipt(input));
+  return timer.time("JSON Validation (shape/type normalization)", async () => normalizeReceiptResult(raw));
 }
 
 /**

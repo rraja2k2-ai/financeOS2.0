@@ -11,9 +11,18 @@ import { deleteQueueItem, getInboxItemStatus } from "@/services/capture/inbox.se
  */
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const start = performance.now();
   try {
     const supabase = await createServerSupabaseClient();
     const item = await getInboxItemStatus(supabase, id);
+    // Performance profiling pass: this endpoint is polled every ~2s while a capture is in
+    // flight (see PROCESSING_POLL_MS in CaptureModal.tsx) — logging every poll would just
+    // spam the console for a trivial single-row lookup that's never the bottleneck. Only
+    // the TERMINAL poll (the one that actually unblocks the UI) is worth a log line —
+    // that's the real "API response back to UI" moment for this endpoint.
+    if (!item || item.transactionHeaderId || item.status === "Failed") {
+      console.log(`[capture:${id}] GET /api/inbox/[id] (terminal poll) — ${Math.round(performance.now() - start)} ms`);
+    }
     return NextResponse.json({ item });
   } catch (err) {
     console.error("[inbox] status check failed:", err);
