@@ -14,10 +14,15 @@ import * as transactionService from "@/services/transaction.service";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const start = performance.now();
 
   try {
     const supabase = await createServerSupabaseClient();
     const data = await getTransactionForReview(supabase, id);
+    // Performance profiling pass: this is the call the Capture success card waits on for
+    // its "Loading details..." state — the real "API response back to UI" moment for the
+    // save-to-success-card path (see CaptureModal.tsx's summary-fetch effect).
+    console.log(`[capture:${id}] GET /api/transactions/[id] (success card summary) — ${Math.round(performance.now() - start)} ms`);
     if (!data) {
       return NextResponse.json({ error: "Transaction not found." }, { status: 404 });
     }

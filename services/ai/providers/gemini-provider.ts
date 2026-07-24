@@ -41,6 +41,13 @@ export class GeminiCaptureProvider implements CaptureAiProvider {
       parts.push({ inlineData: { mimeType: page.mimeType, data: page.dataBase64 } });
     }
 
+    // Performance profiling pass (measure-only): the SDK call is one opaque network round
+    // trip — request-sent vs. response-received can't be split further without
+    // instrumenting the HTTP transport itself, so this times the call as a whole and logs
+    // it separately from capture.service.ts's own (coarser) "Gemini Processing" stage,
+    // giving the request+response vs. JSON.parse split without leaking an app-specific
+    // timer type across the provider-agnostic interface.
+    const callStart = performance.now();
     let text: string;
     try {
       const response = await withTimeout(
@@ -60,17 +67,27 @@ export class GeminiCaptureProvider implements CaptureAiProvider {
       if (err instanceof CaptureAiError) throw err;
       throw classifyGeminiError(err);
     }
+    const callMs = performance.now() - callStart;
 
     if (!text.trim()) {
       throw new CaptureAiError("invalid_response", "Gemini returned an empty response.");
     }
 
+    const parseStart = performance.now();
+    let parsed: CaptureProcessingResult;
     try {
       // JSON response mode is requested, but stay defensive against stray code fences.
-      return JSON.parse(stripCodeFences(text));
+      parsed = JSON.parse(stripCodeFences(text));
     } catch (err) {
       throw new CaptureAiError("invalid_response", "Gemini returned invalid JSON.", err);
     }
+    const parseMs = performance.now() - parseStart;
+
+    console.log(
+      `[gemini] request + response ${Math.round(callMs).toLocaleString("en-US")} ms · JSON.parse ${Math.round(parseMs).toLocaleString("en-US")} ms (response ${text.length.toLocaleString("en-US")} chars)`
+    );
+
+    return parsed;
   }
 }
 
