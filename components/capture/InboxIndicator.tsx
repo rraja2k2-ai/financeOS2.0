@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { isQueueIdWatched } from "@/lib/capture-watch";
 
 /**
  * The ONE small global Capture Inbox indicator (C5). Lives in the app shell, visible
@@ -16,21 +17,22 @@ import { usePathname, useRouter } from "next/navigation";
  * enqueue/retry/delete — Activity (and anything else) listens for that one event rather
  * than each page polling its own queue-status endpoint.
  *
- * Post-capture navigation (Fix 6.4.4): this is a FALLBACK for when the Capture Modal
- * isn't open to see its own capture finish (Modal owns the primary path — see
- * CaptureModal.tsx). A queue row's `transactionHeaderId` being set is the exact id
- * processQueueItem's Save step just created — never a "latest transaction" guess.
- * Whichever poller (this one or the Modal) reads it first navigates AND consumes the
- * row (`POST /api/inbox/[id]/consume`, metadata-only — never touches Storage). Tracked
- * by ID, not just a count, so an unrelated delete of an already-Failed item (which only
- * changes the total, never the Processing set) can never be mistaken for a success.
+ * Fallback cleanup (Capture success redesign): the Capture Modal owns detecting its own
+ * capture finishing while it's open (CaptureModal.tsx) — no automatic navigation happens
+ * anywhere, the user always chooses Review Transaction or Done there. This indicator is
+ * the fallback for when the Modal isn't open to see it (e.g. the user closed the tab
+ * mid-processing): it still consumes the finished row (`POST /api/inbox/[id]/consume`,
+ * metadata-only — never touches Storage) so the queue doesn't linger, but it never
+ * navigates anywhere either — consistent with "the user decides," not just the Modal's
+ * own view. Tracked by ID, not just a count, so an unrelated delete of an already-Failed
+ * item (which only changes the total, never the Processing set) can never be mistaken
+ * for a success.
  */
 
 const POLL_MS = 7000;
 
 export function InboxIndicator() {
   const pathname = usePathname();
-  const router = useRouter();
   const [processingCount, setProcessingCount] = useState(0);
   const prevProcessingIdsRef = useRef<Set<string>>(new Set());
   // The interval tick and the "financeos:inbox-changed" listener can both call refresh()
@@ -62,21 +64,24 @@ export function InboxIndicator() {
         window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
       }
 
-      // Fallback pickup: a capture finished but nothing has consumed it yet (the Modal
-      // that started it isn't open anymore). Pick one per tick — normally there's only
-      // one capture in flight at a time (CLAUDE.md §7).
-      const readyToPickUp = items.find((i) => i.transactionHeaderId);
-      if (readyToPickUp?.transactionHeaderId) {
-        const headerId = readyToPickUp.transactionHeaderId;
+      // Fallback cleanup: a capture finished but nothing has consumed it yet (the Modal
+      // that started it isn't open anymore). Skip any row an open Capture Modal is still
+      // watching (lib/capture-watch.ts) — that Modal's own poll owns consuming it and
+      // showing its success card; racing ahead of it here would delete the row out from
+      // under it, leaving the Modal to close silently instead. Pick one per tick —
+      // normally there's only one capture in flight at a time (CLAUDE.md §7). No
+      // navigation — just tidy up the queue; the user will see it next time they open
+      // Activity themselves.
+      const readyToPickUp = items.find((i) => i.transactionHeaderId && !isQueueIdWatched(i.id));
+      if (readyToPickUp) {
         fetch(`/api/inbox/${readyToPickUp.id}/consume`, { method: "POST" }).catch(() => {});
-        router.push(`/activity?highlight=${headerId}&edit=1`);
       }
     } catch {
       // Network hiccup — keep the previous state; next poll will correct it.
     } finally {
       isRefreshingRef.current = false;
     }
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     refresh();
