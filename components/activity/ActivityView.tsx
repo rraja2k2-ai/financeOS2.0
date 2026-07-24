@@ -62,6 +62,17 @@ function categoryIcon(primary: string | null): LucideIcon {
   return (primary && CATEGORY_ICONS[primary]) || ReceiptIcon;
 }
 
+/**
+ * Progressive disclosure for long receipts (UI Refresh v2.0, §5). Receipts at or under
+ * the threshold show every item — nothing is ever hidden for a normal-sized receipt.
+ * Past it, only DEFAULT_VISIBLE_ITEMS show initially; the gap between the two numbers
+ * has to be wide enough that "Show remaining N items" is worth a tap (hiding just one or
+ * two items would be pointless), so a 9-item receipt (the first case over the threshold)
+ * still hides 3 — a real, worthwhile collapse.
+ */
+const LONG_RECEIPT_THRESHOLD = 8;
+const DEFAULT_VISIBLE_ITEMS = 6;
+
 export type ActivityViewProps = {
   transactions: ActivityTransaction[];
   /** From ?highlight=<id> (Dashboard's Recent Transactions deep link, or post-capture
@@ -151,6 +162,9 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
   // The visual highlight fades after ~3s; the transaction stays expanded. Separate from
   // `expanded` itself so re-collapsing never happens automatically — only the emphasis does.
   const [highlightActive, setHighlightActive] = useState(!!highlightId);
+  // Long-receipt progressive disclosure (UI Refresh v2.0, §5) — which transactions the
+  // user has asked to see in full. Presentation-only; resets naturally on a fresh filter.
+  const [expandedItemsFor, setExpandedItemsFor] = useState<Set<string>>(new Set());
   // Post-Save Review (Fix 7.0): tracks which highlightId auto-edit has already fired for,
   // so an unrelated re-render (e.g. router.refresh() from an inbox-changed event) never
   // reopens Edit after the user has closed it. Reset only when highlightId itself changes.
@@ -547,44 +561,50 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
             {txns.map((t) => {
               const isOpen = expanded === t.id;
               const Icon = categoryIcon(t.primaryCategory);
+              const showAllItems = expandedItemsFor.has(t.id);
+              const isLongReceipt = t.items.length > LONG_RECEIPT_THRESHOLD;
+              const visibleItems = isLongReceipt && !showAllItems ? t.items.slice(0, DEFAULT_VISIBLE_ITEMS) : t.items;
+              const hiddenCount = t.items.length - visibleItems.length;
               return (
                 <div
                   key={t.id}
                   id={`txn-${t.id}`}
                   className={cn(
-                    "mb-2 overflow-hidden rounded-[var(--radius-md)] border bg-card shadow-sm transition-colors duration-700",
+                    "mb-2.5 overflow-hidden rounded-[var(--radius-lg)] border bg-card shadow-md transition-colors duration-700",
                     t.id === highlightId && highlightActive ? "border-primary" : "border-border"
                   )}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {/* Header — dominant: stronger background, bolder than the supporting items below. */}
-                  <div className="relative bg-secondary/70">
+                  {/* Header — one continuous surface with the body below it (UI Refresh v2.0):
+                      hierarchy comes from typography and spacing, not a separate background
+                      block. Merchant and amount are the two strongest elements on the card. */}
+                  <div className="relative">
                     <button
-                      className="flex w-full items-center gap-3 p-3 pr-11"
+                      className="flex w-full items-center gap-3 p-3.5 pr-11 text-left transition-transform active:scale-[0.99] motion-reduce:transition-none"
                       onClick={() => setExpanded(isOpen ? null : t.id)}
                       aria-expanded={isOpen}
                     >
-                      <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-primary/15 text-primary">
+                      <div className="flex h-10 w-10 flex-none items-center justify-center rounded-[var(--radius-md)] bg-secondary text-muted-foreground">
                         <Icon size={18} strokeWidth={2} />
                       </div>
-                      <div className="min-w-0 flex-1 text-left">
-                        <p className="truncate text-[13.5px] font-semibold">{highlight(t.merchant, q)}</p>
-                        <p className="truncate text-[11.5px] text-muted-foreground">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[15.5px] font-bold leading-tight">{highlight(t.merchant, q)}</p>
+                        <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
                           {t.primaryCategory} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
                         </p>
                       </div>
                       <div className="flex-none text-right">
                         {t.currencyGroup === "INR" ? (
                           <>
-                            <div className="font-mono text-[13.5px] font-semibold tabular-nums">₹{fmt(t.originalAmount)}</div>
-                            <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
+                            <div className="font-mono text-[17px] font-bold tabular-nums">₹{fmt(t.originalAmount)}</div>
+                            <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
                           </>
                         ) : t.currency === "SGD" ? (
-                          <div className="font-mono text-[13.5px] font-semibold tabular-nums">SGD {fmt(t.originalAmount)}</div>
+                          <div className="font-mono text-[17px] font-bold tabular-nums">SGD {fmt(t.originalAmount)}</div>
                         ) : (
                           <>
-                            <div className="font-mono text-[13.5px] font-semibold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
-                            <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">
+                            <div className="font-mono text-[17px] font-bold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
+                            <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">
                               {t.currency} {fmt(t.originalAmount)}
                             </div>
                           </>
@@ -616,42 +636,58 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
                   </div>
 
                   {/* Expanded items — a supporting timeline, not a nested card: single shared
-                      background, thin dividers, and a vertical accent line tying the rows together. */}
+                      background, thin dividers, and a vertical accent line tying the rows
+                      together instead of numbering. Fades in on open (UI Refresh v2.0 motion);
+                      collapse stays instant — the direction that actually needs the reassurance
+                      is content appearing, not disappearing. */}
                   {isOpen && (
-                    <div className="border-t border-border">
-                      {/* Transaction Details (Fix 6.4.2) — Receipt Date is the primary
-                          business date; Captured (ingestion time) is informational only. */}
-                      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-3.5 py-2.5 text-[11px]">
-                        <div>
-                          <p className="text-muted-foreground">Receipt Date</p>
-                          <p className="mt-0.5 font-semibold text-foreground">{formatFullDate(t.transactionDate)}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-muted-foreground">Captured</p>
-                          <p className="mt-0.5 font-semibold text-foreground">{formatCapturedAt(t.capturedAt)}</p>
-                        </div>
+                    <div className="animate-in fade-in slide-in-from-top-1 duration-200 motion-reduce:animate-none border-t border-border/60">
+                      {/* Receipt Date + Captured — one compact line instead of a two-line
+                          block (UI Refresh v2.0 §3): both dates preserved, just laid out
+                          inline. Receipt Date is the primary business date; Captured
+                          (ingestion time) stays informational only (Fix 6.4.2). */}
+                      <div className="flex flex-wrap items-baseline gap-x-1.5 border-b border-border/60 px-3.5 py-2 text-[11px] text-muted-foreground">
+                        <span>
+                          Receipt <span className="font-semibold text-foreground">{formatFullDate(t.transactionDate)}</span>
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          Captured <span className="font-semibold text-foreground">{formatCapturedAt(t.capturedAt)}</span>
+                        </span>
                       </div>
                       <div className="relative pl-4">
                         <div className="absolute bottom-0 left-[15px] top-0 w-px bg-primary/25" aria-hidden="true" />
-                        {t.items.map((item, i) => (
+                        {visibleItems.map((item, i) => (
                           <div key={item.id} className={cn("relative py-2.5 pr-3", i > 0 && "border-t border-border/60")}>
-                            <span className="absolute left-[-8.5px] top-[15px] h-[7px] w-[7px] rounded-full bg-primary" aria-hidden="true" />
-                            <div className="flex items-start justify-between gap-3 text-[12px]">
+                            <span className="absolute left-[-8.5px] top-[16px] h-[7px] w-[7px] rounded-full bg-primary" aria-hidden="true" />
+                            <div className="flex items-start justify-between gap-3 text-[12.5px]">
                               <div className="min-w-0 flex-1">
                                 <p className="font-semibold text-foreground">{highlight(item.description, q)}</p>
-                                <p className="mt-0.5 text-[10.5px]">
-                                  {formatQty(item.qty) && <span className="font-medium text-primary">{formatQty(item.qty)} </span>}
-                                  <span className="text-muted-foreground">
-                                    {formatQty(item.qty) ? "| " : ""}
+                                <div className="mt-1 flex items-center gap-1.5">
+                                  {formatQty(item.qty) && (
+                                    <span className="flex-none rounded-full bg-primary/15 px-1.5 py-[1px] font-mono text-[10px] font-semibold text-primary">
+                                      {formatQty(item.qty)}
+                                    </span>
+                                  )}
+                                  <span className="truncate text-[10.5px] text-muted-foreground">
                                     {categoryPath(item.primaryCategory, item.secondaryCategory)}
                                   </span>
-                                </p>
+                                </div>
                               </div>
                               <span className="flex-none text-right font-mono font-semibold tabular-nums">{fmt(item.itemTotal)}</span>
                             </div>
                           </div>
                         ))}
                       </div>
+                      {hiddenCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setExpandedItemsFor((prev) => new Set(prev).add(t.id))}
+                          className="block w-full border-t border-dashed border-border/60 py-2.5 pl-[27px] pr-3.5 text-left text-[12px] font-semibold text-primary"
+                        >
+                          Show remaining {hiddenCount} item{hiddenCount === 1 ? "" : "s"}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -669,7 +705,7 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
       {menuAnchor &&
         createPortal(
           <div
-            className="fixed z-[85] w-44 overflow-hidden rounded-[var(--radius-md)] border border-border bg-card shadow-lg"
+            className="fixed z-[85] w-44 overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card shadow-lg"
             style={{ top: menuAnchor.rect.bottom + 4, left: Math.max(8, menuAnchor.rect.right - 176) }}
             onClick={(e) => e.stopPropagation()}
           >
