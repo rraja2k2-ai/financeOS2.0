@@ -65,7 +65,9 @@ export async function POST(req: NextRequest) {
     const item = await enqueueCapture(supabase, { userContext: context.trim(), pages, source }, timer);
 
     // Background processing — continues after this response is sent, same timer/report.
-    after(() => processQueueItem(item.id, timer));
+    // `pages` (the exact bytes just uploaded above) is passed through so processQueueItem
+    // doesn't re-download from Storage what's still sitting right here in memory.
+    after(() => processQueueItem(item.id, timer, pages));
 
     return NextResponse.json({ id: item.id });
   } catch (err) {

@@ -125,7 +125,11 @@ export async function enqueueCapture(
  * or the save itself), the item becomes Failed with a friendly message so the receipt is
  * never lost and the user can retry.
  */
-export async function processQueueItem(queueId: string, timer: StageTimer = createStageTimer()): Promise<void> {
+export async function processQueueItem(
+  queueId: string,
+  timer: StageTimer = createStageTimer(),
+  preloadedPages?: CaptureDocumentPage[]
+): Promise<void> {
   const supabase = createBackgroundSupabaseClient();
 
   let row: CaptureQueueItem | null = null;
@@ -138,10 +142,21 @@ export async function processQueueItem(queueId: string, timer: StageTimer = crea
   if (!row) return; // deleted while queued — nothing to do
 
   try {
-    // Note: pages were already uploaded to Storage during enqueue (see enqueueCapture's
-    // "Image Upload to Storage" stage) — this downloads them back for the AI call, a real
-    // and separately-measurable round trip, not the same work repeated.
-    const pages = await timer.time("Receipt Page Download (Storage → AI input)", () => downloadQueuePages(supabase, row!.pages));
+    // Pages were already uploaded to Storage during enqueue (see enqueueCapture's "Image
+    // Upload to Storage" stage). The very first (non-retry) run's caller (POST
+    // /api/inbox) still has those exact bytes in memory from the SAME request — Next's
+    // after() continues the same server invocation, so nothing has gone stale — and
+    // passes them as `preloadedPages`, skipping a Storage round trip for bytes that were
+    // just uploaded seconds ago. retryQueueItem's caller never has this (only Storage
+    // holds the bytes by retry time), so a retry always falls through to the real
+    // download below, unchanged.
+    let pages: CaptureDocumentPage[];
+    if (preloadedPages) {
+      timer.mark("Receipt Page Download (Storage → AI input) — skipped (pages already in memory from enqueue)", 0);
+      pages = preloadedPages;
+    } else {
+      pages = await timer.time("Receipt Page Download (Storage → AI input)", () => downloadQueuePages(supabase, row!.pages));
+    }
     const masterData = await timer.time("Master Data Load (accounts/projects/rules/currency)", () => loadCaptureMasterData(supabase));
     const result = await processCapture({ userContext: row.user_context, pages, masterData }, timer);
 

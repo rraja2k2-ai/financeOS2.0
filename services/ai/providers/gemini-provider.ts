@@ -7,7 +7,7 @@
  * registering it in providers/index.ts — nothing outside services/ai/providers/ changes.
  */
 import { GoogleGenAI } from "@google/genai";
-import type { Part } from "@google/genai";
+import type { GenerateContentResponseUsageMetadata, Part } from "@google/genai";
 import { getGeminiConfig } from "@/config/gemini";
 import { buildReceiptProcessingPrompt } from "@/prompts/receipt-processing.prompt";
 import {
@@ -33,12 +33,20 @@ export class GeminiCaptureProvider implements CaptureAiProvider {
   }
 
   async processReceipt(input: CaptureProcessingInput): Promise<CaptureProcessingResult> {
+    // Phase 3 profiling (measure-only, read-only — no prompt/request content changes):
+    // times prompt construction separately from the network call below, and captures
+    // the exact sizes that go into it, so latency variance can be correlated against
+    // real payload shape instead of guessed at.
+    const promptBuildStart = performance.now();
     const { system, task } = buildReceiptProcessingPrompt(input.masterData, input.userContext, input.pages.length);
+    const promptBuildMs = performance.now() - promptBuildStart;
 
     // ONE request: task text + every page of the single receipt as inline parts.
     const parts: Part[] = [{ text: task }];
+    let imageBase64Chars = 0;
     for (const page of input.pages) {
       parts.push({ inlineData: { mimeType: page.mimeType, data: page.dataBase64 } });
+      imageBase64Chars += page.dataBase64.length;
     }
 
     // Performance profiling pass (measure-only): the SDK call is one opaque network round
@@ -47,8 +55,18 @@ export class GeminiCaptureProvider implements CaptureAiProvider {
     // it separately from capture.service.ts's own (coarser) "Gemini Processing" stage,
     // giving the request+response vs. JSON.parse split without leaking an app-specific
     // timer type across the provider-agnostic interface.
+    // Phase 4 experiment (temporary, env-gated, measure-only): lets a controlled test
+    // sweep Gemini's thinking-token budget without touching the prompt, model, or
+    // temperature. Unset by default — production behavior (Gemini's own dynamic
+    // default budget) is completely unchanged unless this env var is explicitly set
+    // for a test run. Remove this block once the Phase 4 experiment concludes and a
+    // decision is made.
+    const thinkingBudgetExperiment = process.env.GEMINI_THINKING_BUDGET_EXPERIMENT;
+    const thinkingBudget = thinkingBudgetExperiment !== undefined ? Number(thinkingBudgetExperiment) : undefined;
+
     const callStart = performance.now();
     let text: string;
+    let usage: GenerateContentResponseUsageMetadata | undefined;
     try {
       const response = await withTimeout(
         this.client.models.generateContent({
@@ -58,11 +76,13 @@ export class GeminiCaptureProvider implements CaptureAiProvider {
             responseMimeType: "application/json",
             temperature: 0,
             systemInstruction: system,
+            ...(thinkingBudget !== undefined ? { thinkingConfig: { thinkingBudget } } : {}),
           },
         }),
         REQUEST_TIMEOUT_MS
       );
       text = response.text ?? "";
+      usage = response.usageMetadata;
     } catch (err) {
       if (err instanceof CaptureAiError) throw err;
       throw classifyGeminiError(err);
@@ -85,6 +105,25 @@ export class GeminiCaptureProvider implements CaptureAiProvider {
 
     console.log(
       `[gemini] request + response ${Math.round(callMs).toLocaleString("en-US")} ms · JSON.parse ${Math.round(parseMs).toLocaleString("en-US")} ms (response ${text.length.toLocaleString("en-US")} chars)`
+    );
+
+    // Phase 3 profiling — one machine-parseable line per capture, exact token counts from
+    // Gemini's own usageMetadata (not estimated) plus every payload-shape input requested
+    // for correlation analysis. thoughtsTokenCount is Gemini 2.5's internal "thinking"
+    // token spend, invisible in the response text but billed/latency-relevant — surfaced
+    // here since it's a plausible source of run-to-run variance that nothing else in this
+    // codebase currently reports.
+    const md = input.masterData;
+    console.log(
+      `[gemini-profile] promptBuildMs=${Math.round(promptBuildMs)} systemChars=${system.length} taskChars=${task.length} ` +
+        `promptTotalChars=${system.length + task.length} pages=${input.pages.length} imageBase64Chars=${imageBase64Chars} ` +
+        `totalRequestChars=${system.length + task.length + imageBase64Chars} userContextChars=${input.userContext.length} ` +
+        `categories=${md.categories.length} accounts=${md.accounts.length} projects=${md.projects.length} ` +
+        `categorizationRules=${md.categorizationRules.length} accountMappingRules=${md.accountMappingRules.length} ` +
+        `promptTokens=${usage?.promptTokenCount ?? "n/a"} candidatesTokens=${usage?.candidatesTokenCount ?? "n/a"} ` +
+        `thoughtsTokens=${usage?.thoughtsTokenCount ?? "n/a"} totalTokens=${usage?.totalTokenCount ?? "n/a"} ` +
+        `responseChars=${text.length} networkMs=${Math.round(callMs)} parseMs=${Math.round(parseMs)} ` +
+        `thinkingBudgetConfig=${thinkingBudget ?? "default"}`
     );
 
     return parsed;
