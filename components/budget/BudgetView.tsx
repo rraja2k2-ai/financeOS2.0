@@ -1,11 +1,21 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
+import { Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { shiftMonth, monthLabel } from "@/lib/period";
+import { shiftMonth, monthLabel, monthBounds, startOfMonthIso } from "@/lib/period";
 import { resetMonthToPreviousAction, updateBudgetAmountAction } from "@/app/budget/actions";
 import type { CategoryBudgetVsActual } from "@/services/finance/budget.service";
+
+/**
+ * UI Phase 4 (Premium Budget Experience) — presentation-only redesign. All figures
+ * below (totalBudgetedSgd, totalActualSgd, per-category budgeted/actual, subcategory
+ * amounts) are computed server-side by budget.service.ts and passed in unchanged; this
+ * file only decides how to lay them out. pct()/barColorClass() reuse the exact same
+ * thresholds the previous version used (>=100 over, >=80 amber, else primary) — only
+ * the visual treatment changed, never the math.
+ */
 
 export type BudgetViewProps = {
   month: string;
@@ -25,11 +35,24 @@ function pct(actual: number, budgeted: number): number | null {
   return Math.round((actual / budgeted) * 100);
 }
 
-function barColor(p: number | null): string {
-  if (p === null) return "bg-muted-foreground";
-  if (p >= 100) return "bg-destructive";
+/** Same three zones as before (>=100 / >=80 / else) — only the fill color changed, to
+ *  match §4's "soft red" over-budget treatment instead of a hard-saturation red. */
+function barColorClass(p: number | null): string {
+  if (p === null) return "bg-muted-foreground/30";
+  if (p >= 100) return "bg-destructive/70";
   if (p >= 80) return "bg-amber";
   return "bg-primary";
+}
+
+/** Pure calendar arithmetic (no budget/business logic) — how many days remain in the
+ *  month being viewed, only meaningful when that month is the real current month. */
+function daysLeftInMonth(month: string): number | null {
+  if (month !== startOfMonthIso()) return null;
+  const { end } = monthBounds(month);
+  const endOfMonth = new Date(end + "T00:00:00Z");
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  return Math.max(0, Math.round((endOfMonth.getTime() - today.getTime()) / 86_400_000));
 }
 
 export function BudgetView({
@@ -46,6 +69,7 @@ export function BudgetView({
 
   const overallPct = pct(totalActualSgd, totalBudgetedSgd);
   const remainingSgd = totalBudgetedSgd - totalActualSgd;
+  const daysLeft = daysLeftInMonth(month);
 
   function handleReset() {
     if (!projectId) return;
@@ -82,35 +106,25 @@ export function BudgetView({
         </Link>
       </div>
 
-      {/* Budget Overview */}
-      <section className="mb-6">
-        <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Overview</p>
-        <div className="rounded-[var(--radius-lg)] border border-border bg-card p-[18px]">
-          <div className="flex items-center gap-4">
-            <RingChart pct={overallPct ?? 0} />
-            <div className="flex-1">
-              <p className="font-mono text-[26px] font-semibold tabular-nums">{overallPct ?? "—"}%</p>
-              <p className="text-[12px] text-muted-foreground">of budget used</p>
-            </div>
+      {/* Budget Summary Hero — stat grid + one horizontal bar, no ring/chart (§1). */}
+      <section className="mb-5">
+        <div className="rounded-[var(--radius-lg)] border border-border bg-card p-[18px] shadow-md">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Current Month</p>
+          <p className="mt-0.5 text-[17px] font-bold tracking-tight">{monthLabel(month)}</p>
+
+          <div className="mt-4 grid grid-cols-2 gap-y-4">
+            <HeroStat label="Total Budget" value={`SGD ${fmt(totalBudgetedSgd)}`} />
+            <HeroStat label="Spent" value={`SGD ${fmt(totalActualSgd)}`} />
+            <HeroStat
+              label={remainingSgd >= 0 ? "Remaining" : "Overspent"}
+              value={`SGD ${fmt(Math.abs(remainingSgd))}`}
+              tone={remainingSgd < 0 ? "destructive" : undefined}
+            />
+            <HeroStat label="Progress" value={overallPct !== null ? `${overallPct}%` : "—"} />
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Budgeted</p>
-              <p className="font-mono text-[15px] font-bold tabular-nums">SGD {fmt(totalBudgetedSgd)}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Actual</p>
-              <p className="font-mono text-[15px] font-bold tabular-nums">SGD {fmt(totalActualSgd)}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {remainingSgd >= 0 ? "Remaining" : "Overspent"}
-              </p>
-              <p className={cn("font-mono text-[15px] font-bold tabular-nums", remainingSgd < 0 && "text-destructive")}>
-                SGD {fmt(Math.abs(remainingSgd))}
-              </p>
-            </div>
+          <div className="mt-4 h-[6px] overflow-hidden rounded-full bg-secondary">
+            <AnimatedBarFill pct={overallPct} />
           </div>
 
           {sourceMonth && (
@@ -157,7 +171,30 @@ export function BudgetView({
         )}
       </section>
 
-      {/* Primary Category budget cards */}
+      {/* Budget Pace (§2) — no invented pace calculation exists yet (see deliverable #4
+          in the accompanying summary), so this only ever surfaces facts that already
+          exist elsewhere in this response (remaining SGD) or pure calendar arithmetic
+          (days left) — never a fabricated on-track/behind-pace verdict. */}
+      {totalBudgetedSgd > 0 && (
+        <section className="mb-5">
+          <div className="flex items-center gap-2.5 rounded-[var(--radius-md)] border border-dashed border-border bg-card p-3.5">
+            <div className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-secondary text-muted-foreground">
+              <Clock size={15} strokeWidth={2.2} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] font-bold">Pace tracking</p>
+              <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                {daysLeft !== null
+                  ? `${daysLeft} day${daysLeft === 1 ? "" : "s"} left in ${monthLabel(month)}. Whether spending is ahead of or behind schedule isn't tracked yet.`
+                  : `Pace tracking applies to the current month — you're viewing ${monthLabel(month)}.`}
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Category cards (§3/§5) — one elevated card per category, hierarchy
+          Category → Progress → Remaining → Budget, quick-scan in one glance. */}
       <section className="mb-6">
         <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">By category</p>
 
@@ -166,61 +203,51 @@ export function BudgetView({
             No budget or spend to show for {monthLabel(month)}.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
-            {categories.map((cat, i) => {
+          <div className="flex flex-col gap-2.5">
+            {categories.map((cat) => {
               const isOpen = expandedCategory === cat.primaryCategory;
               const p = pct(cat.actualSgd, cat.budgetedSgd);
               const over = cat.budgetedSgd > 0 && cat.actualSgd > cat.budgetedSgd;
               return (
-                <div key={cat.primaryCategory} className={cn("p-3.5", i > 0 && "border-t border-border")}>
+                <div key={cat.primaryCategory} className="rounded-[var(--radius-lg)] border border-border bg-card p-3.5 shadow-md">
                   <button
-                    className="flex w-full items-baseline justify-between text-left"
+                    className="flex w-full items-center justify-between text-left"
                     onClick={() => setExpandedCategory(isOpen ? null : cat.primaryCategory)}
                     aria-expanded={isOpen}
                   >
-                    <span className="flex items-center gap-1.5 text-[13.5px] font-semibold">
-                      {cat.primaryCategory}
-                      {over && (
-                        <span className="rounded-full bg-destructive/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-destructive">
-                          Overspent
-                        </span>
-                      )}
-                      <svg
-                        width="12"
-                        height="12"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className={cn("text-muted-foreground transition-transform duration-300", isOpen && "rotate-180")}
-                      >
-                        <path d="m6 9 6 6 6-6" />
-                      </svg>
-                    </span>
-                    <span className="text-right font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
-                      {fmt(cat.actualSgd)} / {cat.budgetedSgd > 0 ? fmt(cat.budgetedSgd) : "—"}
-                    </span>
+                    <span className="truncate text-[14px] font-bold">{cat.primaryCategory}</span>
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className={cn("flex-none text-muted-foreground transition-transform duration-300", isOpen && "rotate-180")}
+                    >
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
                   </button>
 
-                  <div className="mt-2 h-[5px] overflow-hidden rounded-full bg-secondary">
-                    <div
-                      className={cn("h-full rounded-full", barColor(p))}
-                      style={{ width: p === null ? "0%" : `${Math.min(100, Math.max(4, p))}%` }}
-                    />
+                  <div className="mt-2.5 h-[7px] overflow-hidden rounded-full bg-secondary">
+                    <AnimatedBarFill pct={p} />
                   </div>
-                  {cat.budgetedSgd > 0 && (
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {cat.actualSgd <= cat.budgetedSgd
-                        ? `SGD ${fmt(cat.budgetedSgd - cat.actualSgd)} remaining`
-                        : `SGD ${fmt(cat.actualSgd - cat.budgetedSgd)} over budget`}
-                    </p>
-                  )}
+
+                  <div className="mt-2.5 flex items-center justify-between gap-2">
+                    <RemainingBadge budgetedSgd={cat.budgetedSgd} actualSgd={cat.actualSgd} over={over} />
+                    <span className="flex-none text-[11px] text-muted-foreground">
+                      Budget <span className="font-mono font-semibold tabular-nums text-foreground">SGD {cat.budgetedSgd > 0 ? fmt(cat.budgetedSgd) : "—"}</span>
+                    </span>
+                  </div>
+                  <p className="mt-1 text-right text-[10.5px] text-muted-foreground">
+                    Spent <span className="font-mono tabular-nums">SGD {fmt(cat.actualSgd)}</span>
+                  </p>
 
                   <div className="grid transition-[grid-template-rows] duration-300 ease-in-out" style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}>
                     <div className="overflow-hidden">
-                      <div className="mt-2.5 space-y-1.5">
+                      <div className="mt-2.5 space-y-1.5 border-t border-border/60 pt-2.5">
                         {cat.subcategories.map((sub) => (
                           <SubcategoryRow
                             key={sub.name}
@@ -244,6 +271,49 @@ export function BudgetView({
         Household monthly budget. Per-project budgets live in the Projects module. Tap a category amount to edit it.
       </p>
     </div>
+  );
+}
+
+function HeroStat({ label, value, tone }: { label: string; value: string; tone?: "destructive" }) {
+  return (
+    <div>
+      <p className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={cn("mt-0.5 font-mono text-[16px] font-bold tabular-nums", tone === "destructive" && "text-destructive")}>{value}</p>
+    </div>
+  );
+}
+
+/** Animates its fill in on mount instead of snapping to the final width immediately —
+ *  purely a CSS transition, the target width (`pct`) is the same value passed in. */
+function AnimatedBarFill({ pct }: { pct: number | null }) {
+  const [width, setWidth] = useState(0);
+  const target = pct === null ? 0 : Math.min(100, Math.max(pct > 0 ? 4 : 0, pct));
+
+  // Plain effect, no requestAnimationFrame: the initial render paints at 0%, then this
+  // runs after that paint and moves it to the target — the CSS transition below animates
+  // the change. rAF isn't needed for that and isn't guaranteed to fire promptly in every
+  // rendering context (e.g. a backgrounded/automated tab), so this is the more reliable form.
+  useEffect(() => {
+    setWidth(target);
+  }, [target]);
+
+  return <div className={cn("h-full rounded-full transition-[width] duration-700 ease-out", barColorClass(pct))} style={{ width: `${width}%` }} />;
+}
+
+function RemainingBadge({ budgetedSgd, actualSgd, over }: { budgetedSgd: number; actualSgd: number; over: boolean }) {
+  if (budgetedSgd <= 0) {
+    return <span className="rounded-full bg-secondary px-2.5 py-1 text-[10.5px] font-semibold text-muted-foreground">No budget set</span>;
+  }
+  const remaining = Math.abs(budgetedSgd - actualSgd);
+  return (
+    <span
+      className={cn(
+        "flex-none rounded-full px-2.5 py-1 text-[10.5px] font-bold tabular-nums",
+        over ? "bg-destructive/15 text-destructive" : "bg-primary/15 text-primary"
+      )}
+    >
+      SGD {fmt(remaining)} {over ? "over" : "left"}
+    </span>
   );
 }
 
@@ -315,30 +385,5 @@ function SubcategoryRow({
         {fmt(sub.actualSgd)} / {sub.budgetedSgd > 0 ? fmt(sub.budgetedSgd) : "—"}
       </span>
     </button>
-  );
-}
-
-function RingChart({ pct }: { pct: number }) {
-  const r = 27;
-  const circumference = 2 * Math.PI * r;
-  const offset = circumference * (1 - Math.min(100, pct) / 100);
-  const color = pct >= 100 ? "var(--destructive)" : pct >= 80 ? "var(--amber)" : "var(--primary)";
-
-  return (
-    <svg width="64" height="64" viewBox="0 0 64 64" className="flex-none">
-      <circle cx="32" cy="32" r={r} fill="none" stroke="var(--secondary)" strokeWidth="7" />
-      <circle
-        cx="32"
-        cy="32"
-        r={r}
-        fill="none"
-        stroke={color}
-        strokeWidth="7"
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-        transform="rotate(-90 32 32)"
-      />
-    </svg>
   );
 }

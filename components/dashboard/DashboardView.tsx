@@ -175,33 +175,48 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
             No transactions yet.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
-            {recentTransactions.map((t, i) => (
+          <div className="flex flex-col gap-2.5">
+            {recentTransactions.map((t) => (
               <Link
                 key={t.id}
                 href={`/activity?highlight=${t.id}`}
-                className={cn("flex items-center gap-3 p-3.5", i > 0 && "border-t border-border")}
+                className="block rounded-[var(--radius-lg)] border border-border bg-card p-3.5 shadow-md transition-transform active:scale-[0.99] motion-reduce:transition-none"
               >
-                <div className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-secondary text-[15px]">🧾</div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13.5px] font-semibold">{t.merchant || "Unknown merchant"}</p>
-                  <p className="truncate text-[11.5px] text-muted-foreground">{t.primaryCategory || "Uncategorized"}</p>
-                  <p className="truncate text-[10.5px] text-muted-foreground">
-                    R: {formatShortDate(t.transactionDate)} • C: {formatShortDateTime(t.capturedAt)}
-                  </p>
+                <p className="truncate text-[14.5px] font-bold leading-tight">{t.merchant || "Unknown merchant"}</p>
+
+                {/* Dates as subtle metadata (Fix 6.4.4 — both dates preserved, Receipt is
+                    the primary business date, Captured is informational only). */}
+                <div className="mt-2 flex flex-wrap items-start gap-x-5 gap-y-1.5">
+                  <div>
+                    <p className="text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground/70">Receipt</p>
+                    <p className="mt-0.5 text-[11.5px] font-semibold text-foreground">{formatReceiptDate(t.transactionDate)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground/70">Captured</p>
+                    <p className="mt-0.5 text-[11.5px] font-medium text-muted-foreground">{formatCapturedMeta(t.capturedAt)}</p>
+                  </div>
                 </div>
-                <div className={cn("flex-none text-right", hidden && "blur-sm select-none")}>
+
+                {/* Category — soft pill, reduced visual weight. */}
+                <div className="mt-2.5">
+                  <span className="inline-block rounded-full bg-secondary px-2.5 py-1 text-[10.5px] font-semibold text-muted-foreground">
+                    {t.primaryCategory || "Uncategorized"}
+                  </span>
+                </div>
+
+                {/* Amount — the strongest visual element on the card. */}
+                <div className={cn("mt-3 border-t border-border/60 pt-2.5 text-right", hidden && "blur-sm select-none")}>
                   {t.currencyGroup === "INR" ? (
                     <>
-                      <div className="font-mono text-[13px] font-semibold tabular-nums">₹{fmt(t.originalAmount)}</div>
-                      <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
+                      <div className="font-mono text-[20px] font-bold tabular-nums">₹{fmt(t.originalAmount)}</div>
+                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
                     </>
                   ) : t.currency === "SGD" ? (
-                    <div className="font-mono text-[13px] font-semibold tabular-nums">SGD {fmt(t.originalAmount)}</div>
+                    <div className="font-mono text-[20px] font-bold tabular-nums">SGD {fmt(t.originalAmount)}</div>
                   ) : (
                     <>
-                      <div className="font-mono text-[13px] font-semibold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
-                      <div className="font-mono text-[10.5px] text-muted-foreground tabular-nums">{t.currency} {fmt(t.originalAmount)}</div>
+                      <div className="font-mono text-[20px] font-bold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
+                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground tabular-nums">{t.currency} {fmt(t.originalAmount)}</div>
                     </>
                   )}
                 </div>
@@ -219,17 +234,18 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
   );
 }
 
-function formatShortDate(iso: string): string {
-  return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { day: "numeric", month: "short" });
+/** "21 Jul 2026" — Receipt Date, the primary business date (CLAUDE.md §7). */
+function formatReceiptDate(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** "Jul 20, 3:32 PM" — Ingestion Date + time, shown alongside Receipt Date (Fix 6.4.4) so
+/** "24 Jul • 8:42 PM" — Ingestion Date + time, shown alongside Receipt Date (Fix 6.4.4) so
  *  the card tells the user where to find this transaction inside Activity. */
-function formatShortDateTime(iso: string): string {
+function formatCapturedMeta(iso: string): string {
   const d = new Date(iso);
-  const datePart = d.toLocaleDateString("en-US", { day: "numeric", month: "short" });
+  const datePart = d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
   const timePart = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  return `${datePart}, ${timePart}`;
+  return `${datePart} • ${timePart}`;
 }
 
 function RingChart({ pct }: { pct: number }) {

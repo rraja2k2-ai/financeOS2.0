@@ -26,6 +26,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { currencyPrefix } from "@/lib/currency";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
 import { computeCategorySpendFromTransactions } from "@/services/finance/activity.service";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
@@ -575,10 +576,11 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
                   )}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {/* Header — one continuous surface with the body below it (UI Refresh v2.0):
-                      hierarchy comes from typography and spacing, not a separate background
-                      block. Merchant and amount are the two strongest elements on the card. */}
-                  <div className="relative">
+                  {/* Header — a slightly elevated surface (bg-surface-2, an existing token one
+                      step up from the card's own bg-card) so it reads as "the receipt header"
+                      at a glance, purely via background/spacing/typography — no new color, no
+                      border, no shadow. Merchant and amount are the two strongest elements. */}
+                  <div className="relative bg-surface-2">
                     <button
                       className="flex w-full items-center gap-3 p-3.5 pr-11 text-left transition-transform active:scale-[0.99] motion-reduce:transition-none"
                       onClick={() => setExpanded(isOpen ? null : t.id)}
@@ -588,7 +590,7 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
                         <Icon size={18} strokeWidth={2} />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[15.5px] font-bold leading-tight">{highlight(t.merchant, q)}</p>
+                        <p className="truncate text-[19px] font-bold leading-tight">{highlight(t.merchant, q)}</p>
                         <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
                           {t.primaryCategory} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
                         </p>
@@ -596,16 +598,29 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
                       <div className="flex-none text-right">
                         {t.currencyGroup === "INR" ? (
                           <>
-                            <div className="font-mono text-[17px] font-bold tabular-nums">₹{fmt(t.originalAmount)}</div>
-                            <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
+                            <div className="font-mono text-[18px] font-bold tabular-nums">
+                              {currencyPrefix("INR")}
+                              {fmt(t.originalAmount)}
+                            </div>
+                            <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">
+                              ≈ {currencyPrefix("SGD")}
+                              {fmt(t.sgdAmount)}
+                            </div>
                           </>
                         ) : t.currency === "SGD" ? (
-                          <div className="font-mono text-[17px] font-bold tabular-nums">SGD {fmt(t.originalAmount)}</div>
+                          <div className="font-mono text-[18px] font-bold tabular-nums">
+                            {currencyPrefix("SGD")}
+                            {fmt(t.originalAmount)}
+                          </div>
                         ) : (
                           <>
-                            <div className="font-mono text-[17px] font-bold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
+                            <div className="font-mono text-[18px] font-bold tabular-nums">
+                              {currencyPrefix("SGD")}
+                              {fmt(t.sgdAmount)}
+                            </div>
                             <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">
-                              {t.currency} {fmt(t.originalAmount)}
+                              {currencyPrefix(t.currency)}
+                              {fmt(t.originalAmount)}
                             </div>
                           </>
                         )}
@@ -635,55 +650,49 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
                     </button>
                   </div>
 
-                  {/* Expanded items — a supporting timeline, not a nested card: single shared
-                      background, thin dividers, and a vertical accent line tying the rows
-                      together instead of numbering. Fades in on open (UI Refresh v2.0 motion);
-                      collapse stays instant — the direction that actually needs the reassurance
-                      is content appearing, not disappearing. */}
+                  {/* Expanded items (UI refinement — Apple Wallet-style receipt scan, not a
+                      timeline): plain rows, one shared hairline divider between them, no
+                      connector line/dots, no qty badge. Line 1 (name + amount) carries the
+                      strongest type on the row — amount bold/16px/mono dominates; line 2 is
+                      muted single-line "qty • Secondary Category" (never Primary — a category
+                      already implied by this transaction's own header). Fades in on open (UI
+                      Refresh v2.0 motion); collapse stays instant. */}
                   {isOpen && (
                     <div className="animate-in fade-in slide-in-from-top-1 duration-200 motion-reduce:animate-none border-t border-border/60">
                       {/* Receipt Date + Captured — one compact line instead of a two-line
                           block (UI Refresh v2.0 §3): both dates preserved, just laid out
                           inline. Receipt Date is the primary business date; Captured
-                          (ingestion time) stays informational only (Fix 6.4.2). */}
-                      <div className="flex flex-wrap items-baseline gap-x-1.5 border-b border-border/60 px-3.5 py-2 text-[11px] text-muted-foreground">
+                          (ingestion time) stays informational only (Fix 6.4.2). Deliberately
+                          dim (text-foreground/60, no bold) — supporting metadata that must
+                          never compete with the merchant title or the line items below it. */}
+                      <div className="flex flex-wrap items-baseline gap-x-1.5 border-b border-border/60 px-3.5 py-3 text-[10.5px] text-muted-foreground">
                         <span>
-                          Receipt <span className="font-semibold text-foreground">{formatFullDate(t.transactionDate)}</span>
+                          Receipt <span className="font-medium text-foreground/60">{formatFullDate(t.transactionDate)}</span>
                         </span>
                         <span aria-hidden="true">·</span>
                         <span>
-                          Captured <span className="font-semibold text-foreground">{formatCapturedAt(t.capturedAt)}</span>
+                          Captured <span className="font-medium text-foreground/60">{formatCapturedAt(t.capturedAt)}</span>
                         </span>
                       </div>
-                      <div className="relative pl-4">
-                        <div className="absolute bottom-0 left-[15px] top-0 w-px bg-primary/25" aria-hidden="true" />
-                        {visibleItems.map((item, i) => (
-                          <div key={item.id} className={cn("relative py-2.5 pr-3", i > 0 && "border-t border-border/60")}>
-                            <span className="absolute left-[-8.5px] top-[16px] h-[7px] w-[7px] rounded-full bg-primary" aria-hidden="true" />
-                            <div className="flex items-start justify-between gap-3 text-[12.5px]">
-                              <div className="min-w-0 flex-1">
-                                <p className="font-semibold text-foreground">{highlight(item.description, q)}</p>
-                                <div className="mt-1 flex items-center gap-1.5">
-                                  {formatQty(item.qty) && (
-                                    <span className="flex-none rounded-full bg-primary/15 px-1.5 py-[1px] font-mono text-[10px] font-semibold text-primary">
-                                      {formatQty(item.qty)}
-                                    </span>
-                                  )}
-                                  <span className="truncate text-[10.5px] text-muted-foreground">
-                                    {categoryPath(item.primaryCategory, item.secondaryCategory)}
-                                  </span>
-                                </div>
+                      <div className="pt-1.5 px-3.5">
+                        {visibleItems.map((item, i) => {
+                          const line2 = [formatQty(item.qty) || null, item.secondaryCategory || null].filter(Boolean).join(" • ");
+                          return (
+                            <div key={item.id} className={cn("flex flex-col gap-1.5 py-3", i > 0 && "border-t border-border/60")}>
+                              <div className="flex items-baseline justify-between gap-3">
+                                <p className="truncate text-[14px] font-semibold text-foreground">{highlight(item.description, q)}</p>
+                                <span className="flex-none text-right font-mono text-[16px] font-bold tabular-nums">{fmt(item.itemTotal)}</span>
                               </div>
-                              <span className="flex-none text-right font-mono font-semibold tabular-nums">{fmt(item.itemTotal)}</span>
+                              {line2 && <p className="truncate text-[11.5px] text-muted-foreground">{line2}</p>}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                       {hiddenCount > 0 && (
                         <button
                           type="button"
                           onClick={() => setExpandedItemsFor((prev) => new Set(prev).add(t.id))}
-                          className="block w-full border-t border-dashed border-border/60 py-2.5 pl-[27px] pr-3.5 text-left text-[12px] font-semibold text-primary"
+                          className="block w-full border-t border-dashed border-border/60 py-2.5 pl-3.5 pr-3.5 text-left text-[12px] font-semibold text-primary"
                         >
                           Show remaining {hiddenCount} item{hiddenCount === 1 ? "" : "s"}
                         </button>
