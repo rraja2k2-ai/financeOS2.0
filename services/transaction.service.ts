@@ -4,6 +4,7 @@ import type { TransactionItem } from "@/domain/transaction-item";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import * as transactionItemRepository from "@/repositories/transaction-item.repository";
 import * as receiptAttachmentRepository from "@/repositories/receipt-attachment.repository";
+import { postTransactionSafely } from "@/services/finance/account-posting.service";
 
 export type Transaction = {
   header: TransactionHeader;
@@ -78,10 +79,16 @@ export async function createTransaction(
     throw error;
   }
 
-  return {
+  const transaction: Transaction = {
     header: data.header,
     items: data.items || [],
   };
+
+  // Account Posting Engine — posting happens ONLY after the save above has already
+  // succeeded, and a posting failure never fails this save (see postTransactionSafely).
+  await postTransactionSafely(supabase, transaction.header, null);
+
+  return transaction;
 }
 
 export async function getTransaction(supabase: SupabaseClient, id: string): Promise<Transaction | null> {
@@ -123,6 +130,11 @@ export async function updateTransaction(supabase: SupabaseClient, id: string, in
     throw new Error(`Transaction with id ${id} not found after update`);
   }
 
+  // Account Posting Engine — reverses the OLD header's posting and applies the NEW
+  // header's, netted into one atomic apply per account (Part: Edit Logic). Only runs
+  // once the update above has already succeeded.
+  await postTransactionSafely(supabase, updatedTransaction.header, existingTransaction.header);
+
   return updatedTransaction;
 }
 
@@ -145,4 +157,8 @@ export async function deleteTransaction(supabase: SupabaseClient, id: string): P
   }
 
   await transactionHeaderRepository.remove(supabase, id);
+
+  // Account Posting Engine — full reversal of the deleted transaction's posting, only
+  // once the delete above has already succeeded (Part: Delete Logic).
+  await postTransactionSafely(supabase, null, existingTransaction.header);
 }

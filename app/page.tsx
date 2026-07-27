@@ -5,6 +5,7 @@ import { getCategorySpend } from "@/services/finance/category-spend.service";
 import { getMonthBudget, sumExpenseBudget } from "@/services/finance/budget.service";
 import { getRecentTransactions } from "@/services/finance/activity.service";
 import { DashboardView } from "@/components/dashboard/DashboardView";
+import { buildAccountNameMap } from "@/components/activity/activity-format";
 
 function currentMonthRange() {
   const now = new Date();
@@ -49,6 +50,7 @@ export default async function DashboardPage() {
       netCash={netCash}
       budget={budget}
       recentTransactions={recentTransactions}
+      accountNameById={buildAccountNameMap(accounts)}
     />
   );
 }

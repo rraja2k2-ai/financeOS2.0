@@ -37,6 +37,11 @@ export type ActivityTransaction = {
    *  into Activity filtered to one account (CLAUDE.md's "Activity is the source of
    *  truth" — this never gains its own account-scoped edit path). */
   sourceAccountId: string | null;
+  /** The receiving account for TRANSFER/INCOME (transaction_headers.target_account_id) —
+   *  already on the header row (Transaction Type Intelligence Part 2), just not carried
+   *  through to this shape until now. Powers the type-aware transaction title ("Source →
+   *  Destination" for an internal transfer) — see activity-format.tsx's transactionTitle(). */
+  targetAccountId: string | null;
   /** Receipt/business date (transaction_headers.transaction_date) — the primary date
    *  Activity sorts, groups, and filters by. See CLAUDE.md §7. */
   transactionDate: string;
@@ -74,6 +79,7 @@ export function toActivityTransaction(header: TransactionHeader, items: Transact
     receiptId: header.receipt_id,
     merchant: header.merchant,
     sourceAccountId: header.source_account_id,
+    targetAccountId: header.target_account_id,
     transactionDate: header.transaction_date,
     capturedAt: header.created_at,
     currency: header.currency,
@@ -155,6 +161,12 @@ export async function getActivityWithHighlight(
 export type RecentTransaction = {
   id: string;
   merchant: string | null;
+  /** transaction_headers.source_account_id / target_account_id — already on the header
+   *  row, just not carried through until now. Powers the type-aware transaction title
+   *  ("Source → Destination" for an internal transfer) — see activity-format.tsx's
+   *  transactionTitle() (Transaction UX Final Polish, Part 2/8). */
+  sourceAccountId: string | null;
+  targetAccountId: string | null;
   /** Receipt/business date (transaction_headers.transaction_date) — shown alongside
    *  capturedAt (Fix 6.4.4) so the card tells the user where to find this transaction
    *  inside Activity, which groups by Receipt Date. Display-only here; this card's
@@ -181,6 +193,8 @@ function toRecentTransaction(header: TransactionHeader): RecentTransaction {
   return {
     id: header.id,
     merchant: header.merchant,
+    sourceAccountId: header.source_account_id,
+    targetAccountId: header.target_account_id,
     transactionDate: header.transaction_date,
     capturedAt: header.created_at,
     primaryCategory: header.primary_category,

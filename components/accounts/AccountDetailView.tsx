@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -14,6 +14,7 @@ import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { TransactionCard } from "@/components/activity/TransactionCard";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
+import { useOverflowMenu } from "@/hooks/useOverflowMenu";
 import { accountTypeLabel } from "@/constants/accounts";
 
 function fmt(n: number, decimals = 2) {
@@ -27,16 +28,18 @@ export type AccountDetailViewProps = {
   period: PeriodKey;
   customStart: string;
   customEnd: string;
+  /** id -> account_name (Transaction UX Final Polish) — see activity-format.tsx's transactionTitle(). */
+  accountNameById: Record<string, string>;
 };
 
-export function AccountDetailView({ account, summary, recentTransactions, period, customStart, customEnd }: AccountDetailViewProps) {
+export function AccountDetailView({ account, summary, recentTransactions, period, customStart, customEnd, accountNameById }: AccountDetailViewProps) {
   const router = useRouter();
 
   // Edit (Transaction Workspace Foundation) — Account Detail is a new entry point to the
   // one shared editor, wired the same way as Dashboard's Recent Transactions (lazy master
   // data, portal-based ⋮ menu). Save/Delete both just refresh this page's own data;
   // Account Detail has no local list to patch in place the way Dashboard does.
-  const [menuAnchor, setMenuAnchor] = useState<{ id: string; rect: DOMRect } | null>(null);
+  const { anchor: menuAnchor, toggle: toggleMenu, close: closeMenu } = useOverflowMenu();
   const [actionError, setActionError] = useState<string | null>(null);
   const {
     masterData,
@@ -51,19 +54,6 @@ export function AccountDetailView({ account, summary, recentTransactions, period
     onDeleted: () => router.refresh(),
     onError: setActionError,
   });
-
-  useEffect(() => {
-    if (!menuAnchor) return;
-    function close() {
-      setMenuAnchor(null);
-    }
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [menuAnchor]);
 
   function goToPeriod(next: { period: PeriodKey; from?: string; to?: string }) {
     const params = new URLSearchParams();
@@ -88,7 +78,7 @@ export function AccountDetailView({ account, summary, recentTransactions, period
   }
 
   return (
-    <div className="px-5 pt-6 pb-8" onClick={() => setMenuAnchor(null)}>
+    <div className="px-5 pt-6 pb-8">
       <div className="mb-4 flex items-center gap-2">
         <Link href="/accounts" aria-label="Back to Accounts" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
@@ -163,7 +153,8 @@ export function AccountDetailView({ account, summary, recentTransactions, period
                 isOpen={false}
                 onToggle={() => router.push(activityHref(t.id))}
                 showActions
-                onActionsClick={(rect) => setMenuAnchor(menuAnchor?.id === t.id ? null : { id: t.id, rect })}
+                onActionsClick={(rect) => toggleMenu(t.id, rect)}
+                accountNameById={accountNameById}
               />
             ))}
             <Link href={activityHref()} className="mt-1 block text-center text-[12.5px] font-semibold text-primary">
@@ -189,7 +180,7 @@ export function AccountDetailView({ account, summary, recentTransactions, period
               disabled={editLoadingId === menuAnchor.id}
               onClick={() => {
                 const id = menuAnchor.id;
-                setMenuAnchor(null);
+                closeMenu();
                 handleEdit(id);
               }}
               className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"

@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { accountRepository } from "@/repositories";
 import { getAccountPeriodSummary, getRecentTransactionsForAccount } from "@/services/finance/account-detail.service";
 import { AccountDetailView } from "@/components/accounts/AccountDetailView";
+import { buildAccountNameMap } from "@/components/activity/activity-format";
 import { resolvePeriodRange, PERIOD_OPTIONS, type PeriodKey } from "@/lib/period";
 
 // Recent Transactions relies on server-recomputed summary/preview per period change
@@ -33,9 +34,10 @@ export default async function AccountDetailPage({
 
   const { start, end } = resolvePeriodRange(period, from, to);
 
-  const [summary, recentTransactions] = await Promise.all([
+  const [summary, recentTransactions, allAccounts] = await Promise.all([
     getAccountPeriodSummary(supabase, id, start, end),
     getRecentTransactionsForAccount(supabase, id, start, end, RECENT_LIMIT),
+    accountRepository.list(supabase),
   ]);
 
   return (
@@ -46,6 +48,7 @@ export default async function AccountDetailPage({
       period={period}
       customStart={from ?? ""}
       customEnd={to ?? ""}
+      accountNameById={buildAccountNameMap(allAccounts)}
     />
   );
 }
