@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { getTransactionForReview, updateReviewedTransaction } from "@/services/capture/update-transaction.service";
 import { SaveValidationError, type ReviewedCapture } from "@/services/capture/save-capture.service";
+import { getRecentTransactionById } from "@/services/finance/activity.service";
 import * as transactionService from "@/services/transaction.service";
 
 /**
@@ -53,7 +54,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     revalidatePath("/activity");
     revalidatePath("/");
 
-    return NextResponse.json({ updated: true });
+    // Dashboard's Recent Transactions Edit Action (Milestone 4) patches just this one
+    // card client-side from this field instead of a full router.refresh() — an
+    // additive response field existing PUT callers (Activity's handleEditSave) simply
+    // ignore, so this never changes Activity's own behavior.
+    const recentTransaction = await getRecentTransactionById(supabase, id);
+
+    return NextResponse.json({ updated: true, recentTransaction });
   } catch (err) {
     if (err instanceof SaveValidationError) {
       return NextResponse.json({ error: err.message }, { status: 400 });

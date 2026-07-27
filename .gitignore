@@ -37,6 +37,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# database data dumps (real production data — schema migrations only belong in
+# docs/database/migrations/; a raw *_rows.sql export must never be committed)
+docs/database/*_rows.sql
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

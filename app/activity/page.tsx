@@ -1,8 +1,13 @@
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { getActivityWithHighlight } from "@/services/finance/activity.service";
 import { loadCaptureMasterData } from "@/services/capture/master-data.service";
+import { accountRepository } from "@/repositories";
 import { ActivityView } from "@/components/activity/ActivityView";
-import { todayIso } from "@/lib/period";
+import { todayIso, PERIOD_OPTIONS, type PeriodKey } from "@/lib/period";
+
+function isPeriodKey(value: string | undefined): value is PeriodKey {
+  return !!value && PERIOD_OPTIONS.some((p) => p.key === value);
+}
 
 // Auto-save (UX refresh Phase F) can insert a new transaction here from a background
 // job, outside any request Activity itself is part of — same reasoning as Inbox's own
@@ -21,20 +26,44 @@ function twelveMonthsAgoIso(): string {
 export default async function ActivityPage({
   searchParams,
 }: {
-  searchParams: Promise<{ highlight?: string; edit?: string }>;
+  searchParams: Promise<{
+    highlight?: string;
+    edit?: string;
+    account?: string;
+    period?: string;
+    from?: string;
+    to?: string;
+    category?: string;
+    subcategory?: string;
+  }>;
 }) {
   const supabase = await createServerSupabaseClient();
-  const { highlight, edit } = await searchParams;
+  const { highlight, edit, account, period, from, to, category, subcategory } = await searchParams;
   // masterData powers the (single, reused) Review screen's dropdowns when editing a
   // transaction from Activity — loaded once here, no client-side queries. Uses
   // getActivityWithHighlight (Fix 7.0) so a ?highlight=<id> deep link — most importantly
   // the one post-capture navigation uses — always finds its target regardless of the
   // transaction's own date, never silently missing it because it falls outside the
   // default rolling window.
-  const [transactions, masterData] = await Promise.all([
+  const [transactions, masterData, account_] = await Promise.all([
     getActivityWithHighlight(supabase, twelveMonthsAgoIso(), todayIso(), highlight),
     loadCaptureMasterData(supabase),
+    account ? accountRepository.getById(supabase, account).catch(() => null) : Promise.resolve(null),
   ]);
 
-  return <ActivityView transactions={transactions} highlightId={highlight} autoEdit={edit === "1"} masterData={masterData} />;
+  return (
+    <ActivityView
+      transactions={transactions}
+      highlightId={highlight}
+      autoEdit={edit === "1"}
+      masterData={masterData}
+      accountId={account}
+      accountName={account_?.account_name}
+      initialPeriod={isPeriodKey(period) ? period : undefined}
+      initialCustomStart={from}
+      initialCustomEnd={to}
+      categoryFilter={category}
+      subcategoryFilter={subcategory}
+    />
+  );
 }

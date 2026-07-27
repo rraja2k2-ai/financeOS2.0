@@ -2,77 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  Banknote,
-  BadgePercent,
-  Building2,
-  Car,
-  Clapperboard,
-  GraduationCap,
-  HandCoins,
-  HeartHandshake,
-  HeartPulse,
-  Home,
-  Lightbulb,
-  Package,
-  PiggyBank,
-  Receipt as ReceiptIcon,
-  ShieldCheck,
-  ShoppingBag,
-  ShoppingBasket,
-  TrendingUp,
-  UtensilsCrossed,
-  type LucideIcon,
-} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { currencyPrefix } from "@/lib/currency";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
 import { computeCategorySpendFromTransactions } from "@/services/finance/activity.service";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { TopCategoriesCard } from "@/components/shared/TopCategoriesCard";
-import { resolvePeriodRange, startOfMonthIso, todayIso, type PeriodKey } from "@/lib/period";
+import { categoryActivityHref, resolvePeriodRange, startOfMonthIso, todayIso, type PeriodKey } from "@/lib/period";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
-import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
-import type { ReviewedCapture } from "@/services/capture/save-capture.service";
-
-/** Icon per primary category (constants/categories.ts) — presentation only, falls back to a generic receipt for anything unmapped. */
-const CATEGORY_ICONS: Record<string, LucideIcon> = {
-  "Cashback & Rewards": BadgePercent,
-  "Interest Income": PiggyBank,
-  Investments: TrendingUp,
-  "Rental Income": Building2,
-  Salary: Banknote,
-  Education: GraduationCap,
-  "Family Support": HeartHandshake,
-  "Food & Dining": UtensilsCrossed,
-  Groceries: ShoppingBasket,
-  Healthcare: HeartPulse,
-  Housing: Home,
-  "Housing & Utilities": Lightbulb,
-  Insurance: ShieldCheck,
-  "Leisure & Entertainment": Clapperboard,
-  Lending: HandCoins,
-  Miscellaneous: Package,
-  Shopping: ShoppingBag,
-  Transportation: Car,
-};
-
-function categoryIcon(primary: string | null): LucideIcon {
-  return (primary && CATEGORY_ICONS[primary]) || ReceiptIcon;
-}
-
-/**
- * Progressive disclosure for long receipts (UI Refresh v2.0, §5). Receipts at or under
- * the threshold show every item — nothing is ever hidden for a normal-sized receipt.
- * Past it, only DEFAULT_VISIBLE_ITEMS show initially; the gap between the two numbers
- * has to be wide enough that "Show remaining N items" is worth a tap (hiding just one or
- * two items would be pointless), so a 9-item receipt (the first case over the threshold)
- * still hides 3 — a real, worthwhile collapse.
- */
-const LONG_RECEIPT_THRESHOLD = 8;
-const DEFAULT_VISIBLE_ITEMS = 6;
+import { TransactionCard } from "@/components/activity/TransactionCard";
+import { fmt, formatQty, highlight } from "@/components/activity/activity-format";
+import { useTransactionEditor } from "@/hooks/useTransactionEditor";
+import type { CaptureMasterData } from "@/services/ai/ai-provider";
 
 export type ActivityViewProps = {
   transactions: ActivityTransaction[];
@@ -86,77 +29,55 @@ export type ActivityViewProps = {
   autoEdit?: boolean;
   /** Powers the (single, reused) Review screen's dropdowns when editing a transaction. */
   masterData: CaptureMasterData;
+  /** From ?account=<id> (Account Detail's Recent Transactions / See All Transactions
+   *  cross-link) — narrows the list to just this account's transactions. */
+  accountId?: string;
+  /** Display name for the account filter chip — looked up server-side since ActivityView
+   *  otherwise never needs account master data. */
+  accountName?: string;
+  /** From ?period=<key> (Account Detail cross-link) — the period the user had selected
+   *  there, auto-applied here instead of Activity's own highlight-driven default. */
+  initialPeriod?: PeriodKey;
+  initialCustomStart?: string;
+  initialCustomEnd?: string;
+  /** From ?category=<primary> (Dashboard's Top Categories drill-down) — narrows the list
+   *  to transactions with at least one item in this primary category. */
+  categoryFilter?: string;
+  /** From ?subcategory=<secondary> — only meaningful alongside categoryFilter; narrows
+   *  further to items matching both primary and secondary category. */
+  subcategoryFilter?: string;
 };
 
-/** An existing transaction opened for editing — fetched on demand, shaped for the SAME ReviewScreen used by Capture. */
-type EditingTransaction = {
-  headerId: string;
-  result: CaptureReceiptResult;
-  itemIds: string[];
-};
-
-function fmt(n: number, decimals = 2) {
-  return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-}
-
-/** "15 Jul 2026" — the receipt/business date, Activity's primary date (Fix 6.4.2). */
-function formatFullDate(dateIso: string): string {
-  return new Date(dateIso + "T00:00:00").toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
-}
-
-/** "20 Jul 2026, 8:42 PM" — the ingestion timestamp, informational only (Fix 6.4.2). */
-function formatCapturedAt(iso: string): string {
-  const d = new Date(iso);
-  const datePart = d.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
-  const timePart = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  return `${datePart}, ${timePart}`;
-}
-
-/**
- * Qty is stored free text (Fix 5.2). Weight/volume/etc. units are shown exactly as
- * extracted — never reformatted. Only when no unit is present (a bare piece count, e.g.
- * from a legacy fixed-precision NUMERIC cast like "1.000") do we trim insignificant
- * trailing zeros and apply "PC", FinanceOS's standard default unit of measure. This is
- * presentation-only — the stored qty text is never rewritten.
- */
-function formatQty(qty: string): string {
-  const trimmed = qty.trim();
-  const match = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(.*)$/);
-  if (!match) return trimmed;
-  const [, numPart, unitPart] = match;
-  if (unitPart.trim()) return trimmed;
-  const cleanedNum = numPart.includes(".") ? numPart.replace(/0+$/, "").replace(/\.$/, "") || "0" : numPart;
-  return `${cleanedNum} PC`;
-}
-
+/** Only used by the search-results view below (the main list's cards use TransactionCard, which doesn't need it). */
 function categoryPath(primary: string | null, secondary: string | null): string {
   if (primary && secondary) return `${primary} > ${secondary}`;
   return primary ?? secondary ?? "—";
 }
 
-function highlight(text: string | null | undefined, query: string) {
-  const safe = text ?? "";
-  if (!query.trim()) return safe;
-  const idx = safe.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return safe;
-  return (
-    <>
-      {safe.slice(0, idx)}
-      <mark className="rounded bg-accent px-0.5 text-accent-foreground">{safe.slice(idx, idx + query.length)}</mark>
-      {safe.slice(idx + query.length)}
-    </>
-  );
-}
-
-export function ActivityView({ transactions, highlightId, autoEdit, masterData }: ActivityViewProps) {
+export function ActivityView({
+  transactions,
+  highlightId,
+  autoEdit,
+  masterData,
+  accountId,
+  accountName,
+  initialPeriod,
+  initialCustomStart,
+  initialCustomEnd,
+  categoryFilter,
+  subcategoryFilter,
+}: ActivityViewProps) {
   const router = useRouter();
   const highlightedTxn = highlightId ? transactions.find((t) => t.id === highlightId) : undefined;
 
   // A highlighted transaction might be outside "this month" or the default SGD group —
   // widen the filters up front so it's actually visible rather than silently filtered out.
-  const [period, setPeriod] = useState<PeriodKey>(highlightedTxn ? "last6" : "this-month");
-  const [customStart, setCustomStart] = useState(startOfMonthIso());
-  const [customEnd, setCustomEnd] = useState(todayIso());
+  // Account Detail's cross-link always passes its own already-correct period explicitly
+  // (initialPeriod), so that wins over the highlight-driven default instead of being
+  // silently overridden — see CLAUDE.md §7's "Period ... auto-applied" requirement.
+  const [period, setPeriod] = useState<PeriodKey>(initialPeriod ?? (highlightedTxn ? "last6" : "this-month"));
+  const [customStart, setCustomStart] = useState(initialCustomStart || startOfMonthIso());
+  const [customEnd, setCustomEnd] = useState(initialCustomEnd || todayIso());
   const [group, setGroup] = useState<"SGD" | "INR">(highlightedTxn?.currencyGroup ?? "SGD");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<string | null>(highlightId ?? null);
@@ -172,12 +93,32 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
   const autoEditFiredRef = useRef<string | null>(null);
 
   // Edit & Delete (Fix 3) — the transaction header's own actions, not the line items'.
-  const [editLoadingId, setEditLoadingId] = useState<string | null>(null);
-  const [editing, setEditing] = useState<EditingTransaction | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Edit itself (fetch/save/delete orchestration) is shared via useTransactionEditor
+  // (Transaction Workspace Foundation) — the same hook Dashboard and Account Detail use.
+  const {
+    editing,
+    loadingId: editLoadingId,
+    openEditor: handleEdit,
+    closeEditor,
+    saveEditor,
+    deleteEditor,
+  } = useTransactionEditor({
+    masterData,
+    onSaved: () => {
+      setToast("Transaction updated.");
+      router.refresh();
+    },
+    onDeleted: () => {
+      setToast("Transaction deleted.");
+      router.refresh();
+    },
+    onError: setActionError,
+  });
 
   // Header overflow menu (UX refresh Phase C) + Receipt Viewer (Phase D). The menu
   // renders through a portal (Fix 5.3) so it's never clipped by the transaction card's
@@ -220,7 +161,10 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
     if (!highlightId) return;
     const txn = transactions.find((t) => t.id === highlightId);
     if (txn) {
-      setPeriod("last6");
+      // Account Detail's cross-link already picked a period that contains this
+      // transaction (it's the very account+period that surfaced it) — only Activity's
+      // own deep links (Dashboard, no accountId) need the "widen to last6" rescue.
+      if (!accountId) setPeriod("last6");
       setGroup(txn.currencyGroup);
     }
     setExpanded(highlightId);
@@ -231,7 +175,7 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
     const timer = setTimeout(() => setHighlightActive(false), 3000);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- transactions intentionally excluded, see comment above.
-  }, [highlightId]);
+  }, [highlightId, accountId]);
 
   // Post-Save Review (Fix 7.0): right after a successful capture, Activity doesn't just
   // expand and highlight the new transaction — it opens Edit for it automatically too,
@@ -244,7 +188,7 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
     if (autoEditFiredRef.current === highlightId) return;
     autoEditFiredRef.current = highlightId;
     handleEdit(highlightId);
-  }, [autoEdit, highlightId]);
+  }, [autoEdit, highlightId, handleEdit]);
 
   useEffect(() => {
     if (!toast) return;
@@ -263,45 +207,6 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
     window.addEventListener("financeos:inbox-changed", onChanged);
     return () => window.removeEventListener("financeos:inbox-changed", onChanged);
   }, [router]);
-
-  /** Loads the existing transaction and opens the SAME Review screen used by Capture, in edit mode. */
-  async function handleEdit(txnId: string) {
-    setActionError(null);
-    setEditLoadingId(txnId);
-    try {
-      const res = await fetch(`/api/transactions/${txnId}`);
-      const body = (await res.json().catch(() => null)) as { result?: CaptureReceiptResult; itemIds?: string[]; error?: string } | null;
-      if (!res.ok || !body?.result || !body?.itemIds) {
-        setActionError(body?.error ?? "Couldn't load this transaction. Try again.");
-        return;
-      }
-      setEditing({ headerId: txnId, result: body.result, itemIds: body.itemIds });
-    } catch {
-      setActionError("Couldn't reach the server. Try again.");
-    } finally {
-      setEditLoadingId(null);
-    }
-  }
-
-  /** Saves Review edits back onto the SAME transaction (UPDATE, never a new one). */
-  async function handleEditSave(reviewed: ReviewedCapture) {
-    if (!editing) return;
-    const res = await fetch(`/api/transactions/${editing.headerId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reviewed, itemIds: editing.itemIds }),
-      signal: AbortSignal.timeout(60_000),
-    }).catch(() => null);
-
-    const body = res ? ((await res.json().catch(() => null)) as { updated?: boolean; error?: string } | null) : null;
-    if (!res || !res.ok || !body?.updated) {
-      throw new Error(body?.error ?? "Couldn't save changes. Your edits are safe — please try again.");
-    }
-
-    setEditing(null);
-    setToast("Transaction updated.");
-    router.refresh();
-  }
 
   async function handleDelete(txnId: string) {
     setActionError(null);
@@ -364,8 +269,16 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
   const { start: periodStart, end: periodEnd } = resolvePeriodRange(period, customStart, customEnd);
 
   const inPeriod = useMemo(
-    () => transactions.filter((t) => t.transactionDate >= periodStart && t.transactionDate <= periodEnd),
-    [transactions, periodStart, periodEnd]
+    () =>
+      transactions.filter(
+        (t) =>
+          t.transactionDate >= periodStart &&
+          t.transactionDate <= periodEnd &&
+          (!accountId || t.sourceAccountId === accountId) &&
+          (!categoryFilter ||
+            t.items.some((it) => it.primaryCategory === categoryFilter && (!subcategoryFilter || it.secondaryCategory === subcategoryFilter)))
+      ),
+    [transactions, periodStart, periodEnd, accountId, categoryFilter, subcategoryFilter]
   );
 
   const categorySpend = useMemo(() => computeCategorySpendFromTransactions(inPeriod), [inPeriod]);
@@ -433,11 +346,34 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
   const periodLabel =
     period === "custom"
       ? `${periodStart} to ${periodEnd}`
-      : { "this-month": "This month", last3: "Last 3 months", last6: "Last 6 months" }[period];
+      : { "this-month": "This month", "last-month": "Last month", last3: "Last 3 months", last6: "Last 6 months", "this-year": "This year" }[
+          period
+        ];
 
   return (
     <div className="px-5 pt-6" onClick={() => setMenuAnchor(null)}>
       <h1 className="mb-4 text-[22px] font-bold tracking-tight">Activity</h1>
+
+      {accountId && (
+        <div className="mb-4 flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-secondary/40 px-3.5 py-2.5 text-[12px] font-semibold">
+          <span>Showing {accountName ?? "one account"} only</span>
+          <Link href="/activity" className="text-primary">
+            Clear
+          </Link>
+        </div>
+      )}
+
+      {categoryFilter && (
+        <div className="mb-4 flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-secondary/40 px-3.5 py-2.5 text-[12px] font-semibold">
+          <span>
+            Showing {categoryFilter}
+            {subcategoryFilter ? ` → ${subcategoryFilter}` : ""} only
+          </span>
+          <Link href="/activity" className="text-primary">
+            Clear
+          </Link>
+        </div>
+      )}
 
       <PeriodSelector
         period={period}
@@ -448,7 +384,13 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
         onCustomEndChange={setCustomEnd}
       />
 
-      <TopCategoriesCard categories={categorySpend} periodLabel={periodLabel} />
+      <TopCategoriesCard
+        categories={categorySpend}
+        periodLabel={periodLabel}
+        onDrilldown={({ primaryCategory, secondaryCategory }) =>
+          router.push(categoryActivityHref({ primaryCategory, secondaryCategory, period, customStart, customEnd }))
+        }
+      />
 
       <div className="mb-4 grid grid-cols-2 gap-2.5">
         <button
@@ -559,149 +501,20 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
             <p className="mb-2 text-[11.5px] font-bold uppercase tracking-wide text-muted-foreground">
               {new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" })}
             </p>
-            {txns.map((t) => {
-              const isOpen = expanded === t.id;
-              const Icon = categoryIcon(t.primaryCategory);
-              const showAllItems = expandedItemsFor.has(t.id);
-              const isLongReceipt = t.items.length > LONG_RECEIPT_THRESHOLD;
-              const visibleItems = isLongReceipt && !showAllItems ? t.items.slice(0, DEFAULT_VISIBLE_ITEMS) : t.items;
-              const hiddenCount = t.items.length - visibleItems.length;
-              return (
-                <div
-                  key={t.id}
-                  id={`txn-${t.id}`}
-                  className={cn(
-                    "mb-2.5 overflow-hidden rounded-[var(--radius-lg)] border bg-card shadow-md transition-colors duration-700",
-                    t.id === highlightId && highlightActive ? "border-primary" : "border-border"
-                  )}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {/* Header — a slightly elevated surface (bg-surface-2, an existing token one
-                      step up from the card's own bg-card) so it reads as "the receipt header"
-                      at a glance, purely via background/spacing/typography — no new color, no
-                      border, no shadow. Merchant and amount are the two strongest elements. */}
-                  <div className="relative bg-surface-2">
-                    <button
-                      className="flex w-full items-center gap-3 p-3.5 pr-11 text-left transition-transform active:scale-[0.99] motion-reduce:transition-none"
-                      onClick={() => setExpanded(isOpen ? null : t.id)}
-                      aria-expanded={isOpen}
-                    >
-                      <div className="flex h-10 w-10 flex-none items-center justify-center rounded-[var(--radius-md)] bg-secondary text-muted-foreground">
-                        <Icon size={18} strokeWidth={2} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[19px] font-bold leading-tight">{highlight(t.merchant, q)}</p>
-                        <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                          {t.primaryCategory} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
-                        </p>
-                      </div>
-                      <div className="flex-none text-right">
-                        {t.currencyGroup === "INR" ? (
-                          <>
-                            <div className="font-mono text-[18px] font-bold tabular-nums">
-                              {currencyPrefix("INR")}
-                              {fmt(t.originalAmount)}
-                            </div>
-                            <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">
-                              ≈ {currencyPrefix("SGD")}
-                              {fmt(t.sgdAmount)}
-                            </div>
-                          </>
-                        ) : t.currency === "SGD" ? (
-                          <div className="font-mono text-[18px] font-bold tabular-nums">
-                            {currencyPrefix("SGD")}
-                            {fmt(t.originalAmount)}
-                          </div>
-                        ) : (
-                          <>
-                            <div className="font-mono text-[18px] font-bold tabular-nums">
-                              {currencyPrefix("SGD")}
-                              {fmt(t.sgdAmount)}
-                            </div>
-                            <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">
-                              {currencyPrefix(t.currency)}
-                              {fmt(t.originalAmount)}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </button>
-
-                    {/* Header-level actions — a single overflow menu, top-right of the transaction header. */}
-                    <button
-                      type="button"
-                      aria-label="Transaction actions"
-                      title="Transaction actions"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (menuAnchor?.id === t.id) {
-                          setMenuAnchor(null);
-                          return;
-                        }
-                        setMenuAnchor({ id: t.id, rect: e.currentTarget.getBoundingClientRect() });
-                      }}
-                      className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground"
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <circle cx="12" cy="5" r="1.8" />
-                        <circle cx="12" cy="12" r="1.8" />
-                        <circle cx="12" cy="19" r="1.8" />
-                      </svg>
-                    </button>
-                  </div>
-
-                  {/* Expanded items (UI refinement — Apple Wallet-style receipt scan, not a
-                      timeline): plain rows, one shared hairline divider between them, no
-                      connector line/dots, no qty badge. Line 1 (name + amount) carries the
-                      strongest type on the row — amount bold/16px/mono dominates; line 2 is
-                      muted single-line "qty • Secondary Category" (never Primary — a category
-                      already implied by this transaction's own header). Fades in on open (UI
-                      Refresh v2.0 motion); collapse stays instant. */}
-                  {isOpen && (
-                    <div className="animate-in fade-in slide-in-from-top-1 duration-200 motion-reduce:animate-none border-t border-border/60">
-                      {/* Receipt Date + Captured — one compact line instead of a two-line
-                          block (UI Refresh v2.0 §3): both dates preserved, just laid out
-                          inline. Receipt Date is the primary business date; Captured
-                          (ingestion time) stays informational only (Fix 6.4.2). Deliberately
-                          dim (text-foreground/60, no bold) — supporting metadata that must
-                          never compete with the merchant title or the line items below it. */}
-                      <div className="flex flex-wrap items-baseline gap-x-1.5 border-b border-border/60 px-3.5 py-3 text-[10.5px] text-muted-foreground">
-                        <span>
-                          Receipt <span className="font-medium text-foreground/60">{formatFullDate(t.transactionDate)}</span>
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span>
-                          Captured <span className="font-medium text-foreground/60">{formatCapturedAt(t.capturedAt)}</span>
-                        </span>
-                      </div>
-                      <div className="pt-1.5 px-3.5">
-                        {visibleItems.map((item, i) => {
-                          const line2 = [formatQty(item.qty) || null, item.secondaryCategory || null].filter(Boolean).join(" • ");
-                          return (
-                            <div key={item.id} className={cn("flex flex-col gap-1.5 py-3", i > 0 && "border-t border-border/60")}>
-                              <div className="flex items-baseline justify-between gap-3">
-                                <p className="truncate text-[14px] font-semibold text-foreground">{highlight(item.description, q)}</p>
-                                <span className="flex-none text-right font-mono text-[16px] font-bold tabular-nums">{fmt(item.itemTotal)}</span>
-                              </div>
-                              {line2 && <p className="truncate text-[11.5px] text-muted-foreground">{line2}</p>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      {hiddenCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setExpandedItemsFor((prev) => new Set(prev).add(t.id))}
-                          className="block w-full border-t border-dashed border-border/60 py-2.5 pl-3.5 pr-3.5 text-left text-[12px] font-semibold text-primary"
-                        >
-                          Show remaining {hiddenCount} item{hiddenCount === 1 ? "" : "s"}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {txns.map((t) => (
+              <TransactionCard
+                key={t.id}
+                transaction={t}
+                query={q}
+                isOpen={expanded === t.id}
+                onToggle={() => setExpanded(expanded === t.id ? null : t.id)}
+                isHighlighted={t.id === highlightId && highlightActive}
+                showActions
+                onActionsClick={(rect) => setMenuAnchor(menuAnchor?.id === t.id ? null : { id: t.id, rect })}
+                showAllItems={expandedItemsFor.has(t.id)}
+                onShowAllItems={() => setExpandedItemsFor((prev) => new Set(prev).add(t.id))}
+              />
+            ))}
           </div>
         ))
       )}
@@ -758,13 +571,18 @@ export function ActivityView({ transactions, highlightId, autoEdit, masterData }
           document.body
         )}
 
-      {/* Edit — the SAME Review screen used by Capture, populated from the saved transaction. Save UPDATEs it, never creates a new one. */}
+      {/* Edit — the SAME Review screen used by Capture, populated from the saved transaction.
+          Save UPDATEs it, never creates a new one. Delete (Transaction Workspace Foundation)
+          is a second way to remove a transaction, alongside this card's own quick-delete
+          (confirmingDeleteId/handleDelete) above — both end up calling the same DELETE API. */}
       {editing && (
         <ReviewScreen
           result={editing.result}
           masterData={masterData}
-          onCancel={() => setEditing(null)}
-          onSave={handleEditSave}
+          capturedAt={editing.capturedAt}
+          onCancel={closeEditor}
+          onSave={saveEditor}
+          onDelete={deleteEditor}
         />
       )}
 

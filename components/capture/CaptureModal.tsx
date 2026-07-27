@@ -147,7 +147,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   // Review Transaction or Done (Capture success redesign).
   const [succeeded, setSucceeded] = useState(false);
   const [savedHeaderId, setSavedHeaderId] = useState<string | null>(null);
-  const [transactionData, setTransactionData] = useState<{ result: CaptureReceiptResult; itemIds: string[] } | null>(null);
+  const [transactionData, setTransactionData] = useState<{ result: CaptureReceiptResult; itemIds: string[]; capturedAt: string } | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summaryRetryToken, setSummaryRetryToken] = useState(0);
@@ -446,14 +446,19 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     setSummaryLoading(true);
     setSummaryError(null);
     fetch(`/api/transactions/${savedHeaderId}`, { signal: AbortSignal.timeout(20_000) })
-      .then(async (res) => ({ ok: res.ok, body: (await res.json().catch(() => null)) as { result?: CaptureReceiptResult; itemIds?: string[]; error?: string } | null }))
+      .then(async (res) => ({
+        ok: res.ok,
+        body: (await res.json().catch(() => null)) as
+          | { result?: CaptureReceiptResult; itemIds?: string[]; capturedAt?: string; error?: string }
+          | null,
+      }))
       .then(({ ok, body }) => {
         if (cancelled) return;
         if (!ok || !body?.result || !body?.itemIds) {
           setSummaryError(body?.error ?? "Couldn't load the transaction's details.");
           return;
         }
-        setTransactionData({ result: body.result, itemIds: body.itemIds });
+        setTransactionData({ result: body.result, itemIds: body.itemIds, capturedAt: body.capturedAt ?? "" });
       })
       .catch(() => {
         if (!cancelled) setSummaryError("Couldn't reach the server. Try again.");
@@ -565,6 +570,19 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     onClose();
   }
 
+  /** Deletes the just-saved transaction entirely (Transaction Workspace Foundation) —
+   *  reuses the exact same DELETE endpoint as Activity/Dashboard/Account Detail. */
+  async function handleReviewDelete() {
+    if (!savedHeaderId) return;
+    const res = await fetch(`/api/transactions/${savedHeaderId}`, { method: "DELETE" }).catch(() => null);
+    if (!res || !res.ok) {
+      const body = res ? ((await res.json().catch(() => null)) as { error?: string } | null) : null;
+      throw new Error(body?.error ?? "Couldn't delete the transaction. Try again.");
+    }
+    window.dispatchEvent(new CustomEvent("financeos:inbox-changed"));
+    onClose();
+  }
+
   /** No automatic navigation anywhere — just closes, returning the user to whatever screen they were already on. */
   function handleDone() {
     onClose();
@@ -592,8 +610,10 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
       <ReviewScreen
         result={transactionData.result}
         masterData={masterData}
+        capturedAt={transactionData.capturedAt}
         onCancel={() => setReviewing(false)}
         onSave={handleReviewSave}
+        onDelete={handleReviewDelete}
       />
     );
   }

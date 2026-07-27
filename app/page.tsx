@@ -47,7 +47,6 @@ export default async function DashboardPage() {
     <DashboardView
       monthLabel={label}
       netCash={netCash}
-      categorySpend={categorySpend}
       budget={budget}
       recentTransactions={recentTransactions}
     />

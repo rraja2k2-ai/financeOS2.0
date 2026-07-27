@@ -10,6 +10,10 @@ export const BASE_CURRENCIES = ["SGD", "INR"] as const;
 export type BaseCurrency = (typeof BASE_CURRENCIES)[number];
 export const DEFAULT_BASE_CURRENCY: BaseCurrency = "SGD";
 
+/** Every currency the app's exchange-rate system knows about (base + target, deduped) —
+ *  the canonical "supported currency" list for Account currency validation. */
+export const ALL_CURRENCIES: string[] = Array.from(new Set<string>([...BASE_CURRENCIES, ...SUPPORTED_TARGET_CURRENCIES]));
+
 export type ExchangeRate = {
   id: string;
   base_currency: string;

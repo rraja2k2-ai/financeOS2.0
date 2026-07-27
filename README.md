@@ -53,15 +53,14 @@ If variables are missing or invalid, the app and verification script fail with a
 
 ### Supabase architecture
 
-| Layer    | Path                     | Purpose                                                  |
-| -------- | ------------------------ | -------------------------------------------------------- |
-| Config   | `config/env.ts`          | Validates required environment variables                 |
-| Config   | `config/supabase.ts`     | Exposes validated Supabase settings                      |
-| Clients  | `lib/supabase/client.ts` | Browser Supabase client                                  |
-| Clients  | `lib/supabase/server.ts` | Server Supabase client (SSR)                             |
-| Database | `lib/database/`          | Reusable connection entry points for future repositories |
+| Layer    | Path                     | Purpose                                   |
+| -------- | ------------------------ | ------------------------------------------ |
+| Config   | `config/environment.ts`  | Validates required environment variables   |
+| Config   | `config/supabase.ts`     | Exposes validated Supabase settings        |
+| Clients  | `lib/supabase/client.ts` | Browser Supabase client                    |
+| Clients  | `lib/supabase/server.ts` | Server Supabase client (SSR)               |
 
-Use `getBrowserDatabase()` in Client Components and `getServerDatabase()` in Server Components, Server Actions, and route handlers.
+Use `createBrowserSupabaseClient()` (from `lib/supabase`) in Client Components and `createServerSupabaseClient()` in Server Components, Server Actions, and route handlers.
 
 ## Learn More
 

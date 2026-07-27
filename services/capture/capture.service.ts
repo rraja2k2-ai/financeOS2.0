@@ -13,6 +13,7 @@
 import { getCaptureAiProvider } from "@/services/ai/providers";
 import { CaptureAiError, type CaptureProcessingInput, type CaptureReceiptResult } from "@/services/ai/ai-provider";
 import { createStageTimer, type StageTimer } from "@/lib/perf-timer";
+import { TRANSACTION_TYPES, isTransactionType } from "@/constants/transaction-types";
 
 /**
  * `timer` (performance profiling pass, optional): `provider.processReceipt()` is one
@@ -57,6 +58,7 @@ function normalizeReceiptResult(raw: unknown): CaptureReceiptResult {
       tax: asNumber(header.tax),
       discount: asNumber(header.discount),
       notes: asString(header.notes),
+      transactionType: asTransactionType(header.transactionType),
     },
     items: itemsRaw
       .map((entry) => asObject(entry))
@@ -65,6 +67,7 @@ function normalizeReceiptResult(raw: unknown): CaptureReceiptResult {
         description: asString(item.description) ?? "(unreadable item)",
         qty: asNumber(item.qty),
         unit: asString(item.unit),
+        packSize: asString(item.packSize),
         unitPrice: asNumber(item.unitPrice),
         lineAmount: asNumber(item.lineAmount),
         primaryCategory: asString(item.primaryCategory),
@@ -73,6 +76,7 @@ function normalizeReceiptResult(raw: unknown): CaptureReceiptResult {
     headerSuggestions: {
       account: asString(suggestions.account),
       project: asString(suggestions.project),
+      destinationAccount: asString(suggestions.destinationAccount),
     },
     other: {
       tags: Array.isArray(other.tags) ? other.tags.filter((t): t is string => typeof t === "string") : [],
@@ -95,4 +99,10 @@ function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))) return Number(value);
   return null;
+}
+
+/** Defaults a missing/unrecognized AI classification to EXPENSE — never throws. */
+function asTransactionType(value: unknown): string {
+  if (typeof value === "string" && isTransactionType(value)) return value;
+  return TRANSACTION_TYPES.EXPENSE;
 }

@@ -75,11 +75,30 @@ export type CaptureReceiptResult = {
     tax: number | null;
     discount: number | null;
     notes: string | null;
+    /** One of the 5 constants.TRANSACTION_TYPES values, or null if the AI couldn't
+     *  classify it — normalizeReceiptResult() defaults null/invalid to EXPENSE
+     *  (Transaction Type Intelligence Pipeline milestone). */
+    transactionType: string | null;
   };
   items: {
     description: string;
+    /** How many of `unit` were actually purchased — a discrete count (e.g. 1 bag, 2
+     *  cans) OR the measured amount itself for a loose/variable-weight item (e.g. 1.356
+     *  for 1.356 kg of loose chicken). NEVER the package's printed size — see `unit` and
+     *  `packSize` below (Gemini Receipt Intelligence Contract). */
     qty: number | null;
+    /** The discrete unit `qty` counts: a purchasable unit ("bag", "bottle", "pack",
+     *  "box", "can", "tray", "bundle", "pair", "set", "pc") for a pre-packaged item, OR
+     *  the measure itself ("kg", "g", "L", "ml") when the item is sold loose/by variable
+     *  weight with no fixed package. Never normalized or converted. */
     unit: string | null;
+    /** The pre-packaged size exactly as printed (e.g. "5 kg", "2 L", "6 cans") — ONLY
+     *  for a fixed pre-packaged item; null for a loose/variable-weight item, where `qty`
+     *  + `unit` already ARE the measured amount and there is no separate package size.
+     *  Gemini Receipt Intelligence Contract — facts only, never inferred. */
+    packSize: string | null;
+    /** The per-unit price exactly as PRINTED on the receipt (e.g. "$8.40/kg" -> 8.40).
+     *  Never calculated or derived from lineAmount/qty — null when not printed. */
     unitPrice: number | null;
     lineAmount: number | null;
     primaryCategory: string | null;
@@ -88,6 +107,12 @@ export type CaptureReceiptResult = {
   headerSuggestions: {
     account: string | null;
     project: string | null;
+    /** Destination account for a TRANSFER/INCOME (Transaction Type Intelligence Part 2)
+     *  — an exact name from ACCOUNTS, or null when the destination is external (a
+     *  person, an outside party) or simply not identifiable. Resolved to
+     *  target_account_id at save time exactly like `account` resolves to
+     *  source_account_id; never a hard validation requirement. */
+    destinationAccount: string | null;
   };
   other: {
     tags: string[];
