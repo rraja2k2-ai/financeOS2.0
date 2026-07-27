@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, FolderKanban, Wallet, X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { FolderKanban, Wallet, X } from "lucide-react";
+import { cn, withCurrent } from "@/lib/utils";
 import { currencyPrefix } from "@/lib/currency";
+import { formatCapturedAt } from "@/components/activity/activity-format";
 import { BASE_CURRENCIES, SUPPORTED_TARGET_CURRENCIES } from "@/domain/exchange-rate";
 import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
-import type { ReviewedCapture } from "@/services/capture/save-capture.service";
+import { merchantRequiredFor, type ReviewedCapture } from "@/services/capture/save-capture.service";
 import { reviewedFromResult } from "@/services/capture/reviewed-from-result";
+import { TransactionItemRow, qtyIsNegative, type ItemDraft } from "@/components/capture/TransactionItemRow";
+import { ALL_TRANSACTION_TYPES, MERCHANT_FIELD_LABELS, TRANSACTION_TYPE_LABELS, TRANSACTION_TYPES, type TransactionType } from "@/constants/transaction-types";
 
 /**
  * FinanceOS Review Screen (C3) — replaces the temporary Developer Viewer.
@@ -31,15 +34,9 @@ type HeaderDraft = {
   account: string;
   project: string;
   notes: string;
-};
-
-type ItemDraft = {
-  description: string;
-  /** Free text combining value and unit, e.g. "0.546 kg", "2 pcs", "500 ml". */
-  qty: string;
-  amount: string;
-  primaryCategory: string;
-  secondaryCategory: string;
+  transactionType: TransactionType;
+  /** Transaction Type Intelligence Part 2 — only meaningful/shown for TRANSFER/INCOME. */
+  destinationAccount: string;
 };
 
 const CURRENCIES: string[] = [...new Set<string>([...BASE_CURRENCIES, ...SUPPORTED_TARGET_CURRENCIES])];
@@ -51,36 +48,36 @@ function draftsFromResult(result: CaptureReceiptResult): { header: HeaderDraft; 
   const reviewed = reviewedFromResult(result);
   return {
     header: { ...reviewed.header, project: reviewed.header.project || DEFAULT_PROJECT },
-    items: reviewed.items,
+    items: reviewed.items.map((item) => ({
+      ...item,
+      // Receipt Intelligence Foundation — unitPrice is numeric in ReviewedItem (the save
+      // contract) but a form-friendly string here, same convention as `amount`.
+      unitPrice: item.unitPrice != null ? String(item.unitPrice) : null,
+    })),
   };
-}
-
-/** Ensure the current value stays selectable even if it isn't in the master list. */
-function withCurrent(options: string[], current: string): string[] {
-  return current && !options.includes(current) ? [current, ...options] : options;
 }
 
 function fmt(n: number) {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** Qty is free text ("0.5 kg", "2 pcs"); flag it only when its leading number is negative. */
-function qtyIsNegative(qty: string): boolean {
-  const match = qty.trim().match(/^-?\d*\.?\d+/);
-  return match !== null && Number(match[0]) < 0;
-}
-
 export function ReviewScreen({
   result,
   masterData,
+  capturedAt,
   onCancel,
   onSave,
+  onDelete,
 }: {
   result: CaptureReceiptResult;
   masterData: CaptureMasterData;
+  /** Ingestion timestamp, read-only display only — never editable (CLAUDE.md §7). */
+  capturedAt?: string;
   onCancel: () => void;
   /** Persist the reviewed data. Resolves on success (parent closes this screen), rejects with a friendly message on failure (this screen stays open). */
   onSave: (reviewed: ReviewedCapture) => Promise<void>;
+  /** Deletes the transaction entirely. Resolves on success (parent closes this screen), rejects with a friendly message on failure (this screen stays open). */
+  onDelete?: () => Promise<void>;
 }) {
   const [{ header, items }] = useState(() => draftsFromResult(result));
   const [headerDraft, setHeaderDraft] = useState<HeaderDraft>(header);
@@ -92,9 +89,21 @@ export function ReviewScreen({
    *  presentational; itemDrafts (the actual edited values) is unaffected by collapsing. */
   const [expandedItem, setExpandedItem] = useState<number | null>(null);
 
+  // Delete Transaction (Transaction Workspace Foundation) — only ever available when
+  // headerId/onDelete are provided, i.e. this screen is editing an already-saved
+  // transaction (every entry point except a fresh in-flight Capture).
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      if (e.key !== "Escape") return;
+      if (confirmingDelete) {
+        setConfirmingDelete(false);
+        return;
+      }
+      onCancel();
     }
     document.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
@@ -103,15 +112,39 @@ export function ReviewScreen({
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
     };
-  }, [onCancel]);
+  }, [onCancel, confirmingDelete]);
 
-  function setHeader<K extends keyof HeaderDraft>(key: K, value: string) {
+  async function handleDelete() {
+    if (!onDelete) return;
+    setDeleteError(null);
+    setDeleting(true);
+    try {
+      await onDelete();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Couldn't delete the transaction. Please try again.");
+      setDeleting(false);
+    }
+  }
+
+  function setHeader<K extends keyof Omit<HeaderDraft, "transactionType">>(key: K, value: string) {
     setHeaderDraft((h) => ({ ...h, [key]: value }));
+  }
+
+  function setTransactionType(value: TransactionType) {
+    setHeaderDraft((h) => ({ ...h, transactionType: value }));
   }
 
   function setItem(index: number, patch: Partial<ItemDraft>) {
     setItemDrafts((list) => list.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   }
+
+  // Transaction Type Finalization — a Transfer whose destination resolves to one of the
+  // user's own accounts needs no counterparty name at all (source + destination already
+  // say everything); merchant is hidden entirely and forced empty at save
+  // (resolveMerchantForSave). An External Transfer (no destination account picked) still
+  // shows the field, labeled "External Party", optional.
+  const isInternalTransfer = headerDraft.transactionType === TRANSACTION_TYPES.TRANSFER && headerDraft.destinationAccount.trim() !== "";
+  const merchantLabel = MERCHANT_FIELD_LABELS[headerDraft.transactionType];
 
   // The taxonomy can contain the same primary name on both the income and expense side
   // (e.g. "Investments") — dedupe for the dropdown and merge subcategories across both.
@@ -131,12 +164,12 @@ export function ReviewScreen({
   // Basic client-side validation only (no server validation in C3).
   const validationErrors = useMemo(() => {
     const errors: string[] = [];
-    if (!headerDraft.merchant.trim()) errors.push("Merchant cannot be empty.");
+    if (merchantRequiredFor(headerDraft.transactionType) && !headerDraft.merchant.trim()) errors.push("Merchant cannot be empty.");
     if (itemDrafts.length === 0) errors.push("At least one line item is required.");
     if (itemDrafts.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) errors.push("Amounts cannot be negative.");
     if (itemDrafts.some((i) => qtyIsNegative(i.qty))) errors.push("Quantities cannot be negative.");
     return errors;
-  }, [headerDraft.merchant, itemDrafts]);
+  }, [headerDraft.merchant, headerDraft.transactionType, itemDrafts]);
 
   const canSave = validationErrors.length === 0 && !saving;
 
@@ -156,6 +189,11 @@ export function ReviewScreen({
           amount: i.amount,
           primaryCategory: i.primaryCategory,
           secondaryCategory: i.secondaryCategory,
+          // Receipt Intelligence Foundation — pass through unedited (no UI control
+          // changes them yet); converts unitPrice back to the numeric save contract.
+          unit: i.unit ?? null,
+          packSize: i.packSize ?? null,
+          unitPrice: i.unitPrice != null && i.unitPrice.trim() !== "" ? Number(i.unitPrice) : null,
         })),
         tax: result.header.tax,
         discount: result.header.discount,
@@ -176,17 +214,21 @@ export function ReviewScreen({
           <div className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Reviewing capture</p>
-              <input
-                value={headerDraft.merchant}
-                onChange={(e) => setHeader("merchant", e.target.value)}
-                placeholder="Merchant"
-                aria-invalid={!headerDraft.merchant.trim()}
-                className={cn(
-                  "w-full truncate bg-transparent text-[21px] font-bold leading-tight tracking-tight outline-none",
-                  "placeholder:text-muted-foreground/60 focus:text-primary",
-                  !headerDraft.merchant.trim() && "text-destructive"
-                )}
-              />
+              {isInternalTransfer ? (
+                <p className="truncate text-[21px] font-bold leading-tight tracking-tight text-muted-foreground">Internal Transfer</p>
+              ) : (
+                <input
+                  value={headerDraft.merchant}
+                  onChange={(e) => setHeader("merchant", e.target.value)}
+                  placeholder={merchantLabel}
+                  aria-invalid={merchantRequiredFor(headerDraft.transactionType) && !headerDraft.merchant.trim()}
+                  className={cn(
+                    "w-full truncate bg-transparent text-[21px] font-bold leading-tight tracking-tight outline-none",
+                    "placeholder:text-muted-foreground/60 focus:text-primary",
+                    merchantRequiredFor(headerDraft.transactionType) && !headerDraft.merchant.trim() && "text-destructive"
+                  )}
+                />
+              )}
             </div>
             <button
               type="button"
@@ -217,10 +259,32 @@ export function ReviewScreen({
             <span>
               {itemDrafts.length} item{itemDrafts.length === 1 ? "" : "s"}
             </span>
+            {/* Capture Date — read only, never editable (CLAUDE.md §7's "Two distinct
+                dates" architecture; Transaction Workspace Foundation continues showing it
+                but does not introduce editing it). */}
+            {capturedAt && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>Captured {formatCapturedAt(capturedAt)}</span>
+              </>
+            )}
           </div>
 
           {/* Compact metadata row — secondary fields, out of the way of the primary summary. */}
           <div className="-mx-5 flex items-center gap-2 overflow-x-auto px-5 pb-4">
+            <MetaPill label="Type">
+              <select
+                value={headerDraft.transactionType}
+                onChange={(e) => setTransactionType(e.target.value as TransactionType)}
+                className={metaSelectClass}
+              >
+                {ALL_TRANSACTION_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {TRANSACTION_TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </MetaPill>
             <MetaPill label="Currency">
               <select value={headerDraft.currency} onChange={(e) => setHeader("currency", e.target.value)} className={metaSelectClass}>
                 <option value="">—</option>
@@ -241,6 +305,20 @@ export function ReviewScreen({
                 ))}
               </select>
             </MetaPill>
+            {/* Transaction Type Intelligence Part 2 — destination account only applies to
+                TRANSFER/INCOME; reuses the exact same account-select markup as Account. */}
+            {(headerDraft.transactionType === "TRANSFER" || headerDraft.transactionType === "INCOME") && (
+              <MetaPill label="Destination" icon={<Wallet size={12} strokeWidth={2.3} />}>
+                <select value={headerDraft.destinationAccount} onChange={(e) => setHeader("destinationAccount", e.target.value)} className={metaSelectClass}>
+                  <option value="">—</option>
+                  {withCurrent(masterData.accounts.map((a) => a.name), headerDraft.destinationAccount).map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </MetaPill>
+            )}
             <MetaPill label="Project" icon={<FolderKanban size={12} strokeWidth={2.3} />}>
               <select value={headerDraft.project} onChange={(e) => setHeader("project", e.target.value)} className={metaSelectClass}>
                 <option value="">—</option>
@@ -265,121 +343,17 @@ export function ReviewScreen({
               </div>
             ) : (
               <div className="divide-y divide-border/40">
-                {itemDrafts.map((item, i) => {
-                  const isOpen = expandedItem === i;
-                  const amountNum = item.amount.trim() !== "" ? Number(item.amount) : null;
-                  // Unit price isn't retained past the AI result (reviewed-from-result.ts
-                  // discards it — only the line total survives into ItemDraft), so this
-                  // never fabricates a "qty × unit price" reading; it falls back to plain
-                  // qty. Secondary Category only — Primary ("Groceries") is deliberately
-                  // never repeated here, since every item in this list already sits under
-                  // that same primary category by construction, so restating it on every
-                  // row adds no information.
-                  const line2 = [item.qty || null, item.secondaryCategory || null].filter(Boolean).join(" • ");
-
-                  return (
-                    <div key={i}>
-                      {/* Collapsed — a receipt row, not a card: typography, spacing, and the
-                          shared divide-y hairline only. No accent bar, no pill/chip/badge, no
-                          icon — tapping anywhere on the row (not a dedicated affordance) expands
-                          it for editing and collapses whichever other row was open (single
-                          expandedItem index). Name is font-semibold; amount is font-mono
-                          font-bold and slightly larger — weight and size together (not an icon)
-                          are what make the amount read as the dominant element. */}
-                      <button
-                        type="button"
-                        onClick={() => setExpandedItem(isOpen ? null : i)}
-                        aria-expanded={isOpen}
-                        className="flex w-full flex-col gap-1.5 py-3.5 text-left"
-                      >
-                        <div className="flex items-baseline justify-between gap-3">
-                          <p className="truncate text-[14.5px] font-semibold leading-snug">{item.description || "Untitled item"}</p>
-                          <span
-                            className={cn(
-                              "flex-none font-mono text-[15.5px] font-bold tabular-nums",
-                              amountNum !== null && amountNum < 0 && "text-destructive"
-                            )}
-                          >
-                            {amountNum !== null ? fmt(amountNum) : "—"}
-                          </span>
-                        </div>
-                        {line2 && <p className="truncate text-[11.5px] text-muted-foreground">{line2}</p>}
-                      </button>
-
-                      {/* Expanded — the exact same editable controls as before (same inputs,
-                          same onChange/setItem calls, same CategoryPicker); only a light
-                          background tint marks the editing area, not a card. ~200ms
-                          grid-rows transition; motion-reduce disables it entirely. */}
-                      <div
-                        className="grid transition-[grid-template-rows] duration-200 ease-in-out motion-reduce:transition-none motion-reduce:duration-0"
-                        style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}
-                      >
-                        <div className="overflow-hidden">
-                          <div className="mb-2.5 rounded-[var(--radius-md)] bg-secondary/40 p-3.5">
-                            <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Item name</p>
-                            <input
-                              value={item.description}
-                              onChange={(e) => setItem(i, { description: e.target.value })}
-                              placeholder="Description"
-                              className="w-full truncate bg-transparent text-[14px] font-bold outline-none placeholder:text-muted-foreground/60 focus:text-primary"
-                            />
-
-                            <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                              {(item.qty || qtyIsNegative(item.qty)) && (
-                                <input
-                                  value={item.qty}
-                                  onChange={(e) => setItem(i, { qty: e.target.value })}
-                                  placeholder="Qty"
-                                  className={cn(
-                                    "w-16 flex-none rounded-full bg-primary/15 px-2 py-[3px] text-center font-mono text-[10.5px] font-semibold text-primary outline-none",
-                                    qtyIsNegative(item.qty) && "bg-destructive/15 text-destructive"
-                                  )}
-                                />
-                              )}
-                              {!item.qty && !qtyIsNegative(item.qty) && (
-                                <input
-                                  value={item.qty}
-                                  onChange={(e) => setItem(i, { qty: e.target.value })}
-                                  placeholder="+ qty"
-                                  className="w-16 flex-none rounded-full border border-dashed border-border px-2 py-[3px] text-center font-mono text-[10.5px] text-muted-foreground outline-none focus:border-primary focus:text-primary"
-                                />
-                              )}
-                              <CategoryPicker
-                                primary={item.primaryCategory}
-                                secondary={item.secondaryCategory}
-                                primaryOptions={withCurrent(primaryOptions, item.primaryCategory)}
-                                secondaryOptions={withCurrent(subcategoriesFor(item.primaryCategory), item.secondaryCategory)}
-                                onPrimaryChange={(primary) => {
-                                  // Keep the subcategory only if it belongs to the new category.
-                                  const keepSecondary = subcategoriesFor(primary).includes(item.secondaryCategory);
-                                  setItem(i, { primaryCategory: primary, secondaryCategory: keepSecondary ? item.secondaryCategory : "" });
-                                }}
-                                onSecondaryChange={(secondary) => setItem(i, { secondaryCategory: secondary })}
-                              />
-                            </div>
-
-                            <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3">
-                              <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Amount</p>
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                step="0.01"
-                                value={item.amount}
-                                onChange={(e) => setItem(i, { amount: e.target.value })}
-                                placeholder="0.00"
-                                className={cn(
-                                  "flex-1 bg-transparent text-right font-mono text-[16px] font-bold tabular-nums outline-none",
-                                  "placeholder:text-muted-foreground/60 focus:text-primary",
-                                  item.amount.trim() !== "" && Number(item.amount) < 0 && "text-destructive"
-                                )}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {itemDrafts.map((item, i) => (
+                  <TransactionItemRow
+                    key={i}
+                    item={item}
+                    isOpen={expandedItem === i}
+                    onToggle={() => setExpandedItem(expandedItem === i ? null : i)}
+                    onChange={(patch) => setItem(i, patch)}
+                    primaryOptions={primaryOptions}
+                    secondaryOptionsFor={subcategoriesFor}
+                  />
+                ))}
               </div>
             )}
           </section>
@@ -433,8 +407,55 @@ export function ReviewScreen({
               {saving ? "Saving…" : "Save Changes"}
             </button>
           </div>
+
+          {/* Delete Transaction (Transaction Workspace Foundation) — only ever rendered
+              when the host provided onDelete, i.e. this screen is editing an
+              already-saved transaction, not a fresh in-flight Capture. */}
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={saving}
+              className="mt-2.5 w-full text-center text-[12.5px] font-semibold text-destructive disabled:opacity-50"
+            >
+              Delete Transaction
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Delete confirmation */}
+      {confirmingDelete && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-8"
+          role="alertdialog"
+          aria-label="Delete this transaction?"
+        >
+          <div className="w-full max-w-[340px] rounded-[var(--radius-lg)] border border-border bg-card p-5">
+            <p className="text-[14.5px] font-bold">Delete this transaction?</p>
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">This action cannot be undone.</p>
+            {deleteError && <p className="mt-2 text-[12px] font-semibold text-destructive">{deleteError}</p>}
+            <div className="mt-4 flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                disabled={deleting}
+                className="flex-1 rounded-lg border border-border py-2 text-[13px] font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 rounded-lg bg-destructive py-2 text-[13px] font-semibold text-white disabled:opacity-50"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -448,58 +469,6 @@ function MetaPill({ label, icon, children }: { label: string; icon?: React.React
       {icon && <span className="text-muted-foreground">{icon}</span>}
       <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</span>
       {children}
-    </div>
-  );
-}
-
-/**
- * Primary → Secondary category picker (UI Phase 2 §4) — two native selects (keeps
- * exact keyboard/accessibility/mobile-picker behavior), visually stacked with a
- * connecting chevron so it reads as one hierarchical "pick a category" control rather
- * than two independent form fields.
- */
-function CategoryPicker({
-  primary,
-  secondary,
-  primaryOptions,
-  secondaryOptions,
-  onPrimaryChange,
-  onSecondaryChange,
-}: {
-  primary: string;
-  secondary: string;
-  primaryOptions: string[];
-  secondaryOptions: string[];
-  onPrimaryChange: (value: string) => void;
-  onSecondaryChange: (value: string) => void;
-}) {
-  return (
-    <div className="flex flex-none items-center gap-1 rounded-full bg-secondary py-[3px] pl-2.5 pr-1.5">
-      <select
-        value={primary}
-        onChange={(e) => onPrimaryChange(e.target.value)}
-        className="max-w-[110px] bg-transparent text-[10.5px] font-bold text-foreground outline-none"
-      >
-        <option value="">Category</option>
-        {primaryOptions.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
-      <ChevronDown size={10} strokeWidth={2.5} className="flex-none text-muted-foreground" aria-hidden="true" />
-      <select
-        value={secondary}
-        onChange={(e) => onSecondaryChange(e.target.value)}
-        className="max-w-[110px] bg-transparent text-[10.5px] font-medium text-muted-foreground outline-none"
-      >
-        <option value="">Subcategory</option>
-        {secondaryOptions.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
     </div>
   );
 }

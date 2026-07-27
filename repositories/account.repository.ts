@@ -61,3 +61,17 @@ export async function remove(supabase: SupabaseClient, id: string): Promise<void
     throw error;
   }
 }
+
+/** Case-insensitive exact-name match — duplicate-name prevention (account-management.service.ts).
+ *  Pass excludeId when editing an account so it doesn't collide with its own name. */
+export async function existsByName(supabase: SupabaseClient, name: string, excludeId?: string): Promise<boolean> {
+  let query = supabase.from("accounts").select("id", { count: "exact", head: true }).ilike("account_name", name);
+  if (excludeId) query = query.neq("id", excludeId);
+
+  const { count, error } = await query;
+  if (error) {
+    throw error;
+  }
+
+  return (count ?? 0) > 0;
+}

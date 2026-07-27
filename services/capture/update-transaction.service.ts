@@ -12,13 +12,45 @@ import { accountRepository, projectRepository } from "@/repositories";
 import * as transactionService from "@/services/transaction.service";
 import { convertToBaseCurrency, ExchangeRateNotFoundError } from "@/services/finance/exchange.service";
 import { DEFAULT_BASE_CURRENCY } from "@/domain/exchange-rate";
-import { dominantCategory, resolveAccountAndProjectIds, round2, SaveValidationError, type ReviewedCapture } from "./save-capture.service";
+import {
+  dominantCategory,
+  resolveAccountAndProjectIds,
+  resolveMerchantForSave,
+  round2,
+  validateForType,
+  SaveValidationError,
+  type ReviewedCapture,
+} from "./save-capture.service";
 import type { CaptureReceiptResult } from "@/services/ai/ai-provider";
+import type { TransactionItem } from "@/domain/transaction-item";
+import { TRANSACTION_TYPES, isTransactionType } from "@/constants/transaction-types";
+
+/**
+ * The exact, whitelisted subset of transaction_items columns a Review Screen Save is
+ * allowed to touch (Receipt Intelligence Foundation follow-up). `unit`/`pack_size`/
+ * `unit_price` are deliberately NOT in this list — there is still no UI to edit them, so
+ * an edit-save must never overwrite whatever a future milestone eventually writes there.
+ * Typing the per-item update literal below against this Pick (not the generic
+ * `Partial<TransactionItem>` transactionService.updateTransaction accepts) turns that
+ * intent into a compile error, not just a code-review convention: adding `unit: null`
+ * (or any other column not listed here) to the object literal below fails
+ * `npx tsc --noEmit` via TypeScript's excess-property check, instead of silently
+ * reintroducing the overwrite bug this whitelist exists to prevent.
+ */
+type ReviewEditableItemUpdate = Pick<TransactionItem, "item_description" | "primary_category" | "secondary_category" | "qty" | "item_total"> & {
+  id: string;
+};
 
 export type TransactionForReview = {
   result: CaptureReceiptResult;
   /** transaction_items ids, in the SAME order as `result.items` — re-zipped with the edited items on save. */
   itemIds: string[];
+  /** Ingestion timestamp (transaction_headers.created_at) — read-only display in the
+   *  Workspace/Review screen (Transaction Workspace Foundation). Never editable; see
+   *  CLAUDE.md §7's "Two distinct dates" architecture. Same raw value as
+   *  RecentTransaction.capturedAt (activity.service.ts), just reused here so every
+   *  entry point that opens the editor gets it from this one reshape function. */
+  capturedAt: string;
 };
 
 /**
@@ -31,9 +63,10 @@ export async function getTransactionForReview(supabase: SupabaseClient, headerId
   if (!transaction) return null;
   const { header, items } = transaction;
 
-  const [account, project] = await Promise.all([
+  const [account, project, destinationAccount] = await Promise.all([
     header.source_account_id ? accountRepository.getById(supabase, header.source_account_id) : Promise.resolve(null),
     header.project_id ? projectRepository.getById(supabase, header.project_id) : Promise.resolve(null),
+    header.target_account_id ? accountRepository.getById(supabase, header.target_account_id) : Promise.resolve(null),
   ]);
 
   // tax/discount aren't stored as separate columns — only the grand total is. Back-derive
@@ -58,14 +91,22 @@ export async function getTransactionForReview(supabase: SupabaseClient, headerId
       tax,
       discount,
       notes: header.comments,
+      transactionType: isTransactionType(header.transaction_type) ? header.transaction_type : TRANSACTION_TYPES.EXPENSE,
     },
     items: items.map((item) => ({
       description: item.item_description,
       qty: null,
-      // The saved qty is already the full free-text value ("0.5 kg", "2 pcs"). Packing it
-      // into `unit` (with `qty` null) makes ReviewScreen's existing join logic
-      // ([qty, unit].filter(Boolean).join(" ")) reconstruct it unchanged — no new code path.
+      // The saved qty is already the full free-text value ("0.5 kg", "2 pcs", or now
+      // "1 bag (5 kg)" under the Gemini Receipt Intelligence Contract). Packing it into
+      // `unit` (with `qty` null) makes reviewedFromResult's join logic reconstruct it
+      // unchanged — no new code path.
       unit: item.qty,
+      // Deliberately null here, NOT item.pack_size — the saved qty text above already
+      // contains any pack size as part of its free-text ("1 bag (5 kg)"). If this were
+      // item.pack_size, reviewedFromResult's join would append it a SECOND time
+      // ("1 bag (5 kg) (5 kg)"). unitPrice has no such join/duplication risk — it never
+      // feeds the qty free-text — so it carries the real stored value straight through.
+      packSize: null,
       unitPrice: item.unit_price !== null ? Number(item.unit_price) : null,
       lineAmount: Number(item.item_total),
       primaryCategory: item.primary_category,
@@ -74,19 +115,22 @@ export async function getTransactionForReview(supabase: SupabaseClient, headerId
     headerSuggestions: {
       account: account?.account_name ?? null,
       project: project?.project_name ?? null,
+      destinationAccount: destinationAccount?.account_name ?? null,
     },
     other: { tags: [], confidence: null, summary: null },
   };
 
-  return { result, itemIds: items.map((i) => i.id) };
+  return { result, itemIds: items.map((i) => i.id), capturedAt: header.created_at };
 }
 
 /**
  * Persists Review edits back onto an EXISTING transaction — always an UPDATE, never a
  * new transaction. Recomputes the header's dominant category from the edited items
  * (the one piece of derived metadata the system maintains) since Description/Category/
- * Subcategory may have changed. Tags, item_group, and search_keywords are left exactly
- * as they were — those remain parked, per Fix 3's scope.
+ * Subcategory may have changed. Tags, item_group, search_keywords, unit, pack_size, and
+ * unit_price are left exactly as they were — those remain parked, per Fix 3's scope /
+ * Receipt Intelligence Foundation; see `ReviewEditableItemUpdate` above for the
+ * compiler-enforced whitelist of what this function is allowed to touch per item.
  */
 export async function updateReviewedTransaction(
   supabase: SupabaseClient,
@@ -94,15 +138,20 @@ export async function updateReviewedTransaction(
   itemIds: string[],
   reviewed: ReviewedCapture
 ): Promise<void> {
-  if (!reviewed.header.merchant.trim()) throw new SaveValidationError("Merchant cannot be empty.");
-  if (reviewed.items.length === 0) throw new SaveValidationError("At least one line item is required.");
-  if (reviewed.items.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) throw new SaveValidationError("Amounts cannot be negative.");
+  const [firstError] = validateForType(reviewed);
+  if (firstError) throw new SaveValidationError(firstError);
   if (itemIds.length !== reviewed.items.length) {
     throw new SaveValidationError("Line items changed unexpectedly — please reopen and try again.");
   }
 
   const [accounts, projects] = await Promise.all([accountRepository.list(supabase), projectRepository.list(supabase)]);
-  const { sourceAccountId, projectId } = resolveAccountAndProjectIds(accounts, projects, reviewed.header.account, reviewed.header.project);
+  const { sourceAccountId, projectId, destinationAccountId } = resolveAccountAndProjectIds(
+    accounts,
+    projects,
+    reviewed.header.account,
+    reviewed.header.project,
+    reviewed.header.destinationAccount
+  );
 
   const subtotal = round2(reviewed.items.reduce((sum, i) => sum + (Number(i.amount) || 0), 0));
   const tax = reviewed.tax ?? 0;
@@ -125,10 +174,12 @@ export async function updateReviewedTransaction(
 
   await transactionService.updateTransaction(supabase, headerId, {
     header: {
-      merchant: reviewed.header.merchant.trim(),
+      merchant: resolveMerchantForSave(reviewed.header.transactionType, reviewed.header.merchant, destinationAccountId),
       transaction_date: reviewed.header.transactionDate.trim() || new Date().toISOString().slice(0, 10),
+      transaction_type: reviewed.header.transactionType,
       currency,
       source_account_id: sourceAccountId,
+      target_account_id: destinationAccountId,
       project_id: projectId,
       primary_category: dominantCategory(reviewed.items),
       original_amount: String(grandTotal),
@@ -136,13 +187,15 @@ export async function updateReviewedTransaction(
       sgd_total_amount: String(baseAmount),
       comments: reviewed.header.notes.trim() || null,
     },
-    items: reviewed.items.map((item, i) => ({
-      id: itemIds[i],
-      item_description: item.description.trim() || "(unnamed item)",
-      primary_category: item.primaryCategory.trim() || "Miscellaneous",
-      secondary_category: (item.secondaryCategory.trim() || null) as unknown as string,
-      qty: item.qty.trim(),
-      item_total: String(round2(Number(item.amount) || 0)),
-    })),
+    items: reviewed.items.map(
+      (item, i): ReviewEditableItemUpdate => ({
+        id: itemIds[i],
+        item_description: item.description.trim() || "(unnamed item)",
+        primary_category: item.primaryCategory.trim() || "Miscellaneous",
+        secondary_category: (item.secondaryCategory.trim() || null) as unknown as string,
+        qty: item.qty.trim(),
+        item_total: String(round2(Number(item.amount) || 0)),
+      })
+    ),
   });
 }

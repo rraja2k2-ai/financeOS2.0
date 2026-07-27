@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import type { GroupedAccounts } from "@/services/finance/accounts.service";
 
@@ -80,7 +81,11 @@ export function AccountsView({ data }: AccountsViewProps) {
               <div key={tg.label} className="mb-3.5">
                 <p className="mb-1.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-foreground">{tg.label}</p>
                 {tg.accounts.map((acc) => (
-                  <div key={acc.id} className="mb-1.5 flex items-center gap-3 rounded-[var(--radius-md)] border border-border bg-card p-3">
+                  <Link
+                    key={acc.id}
+                    href={`/accounts/${acc.id}`}
+                    className="mb-1.5 flex items-center gap-3 rounded-[var(--radius-md)] border border-border bg-card p-3"
+                  >
                     <div
                       className={cn(
                         "flex h-9 w-9 flex-none items-center justify-center rounded-lg text-[15px]",
@@ -110,7 +115,7 @@ export function AccountsView({ data }: AccountsViewProps) {
                         </div>
                       )}
                     </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
             ))}

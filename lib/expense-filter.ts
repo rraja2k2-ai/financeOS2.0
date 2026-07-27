@@ -6,8 +6,7 @@
  * accounts/liabilities, they don't represent spend.
  *
  * Two layers, since real data isn't consistently tagged:
- *   1. transaction_type: "Payment" and "Transfer" are structurally distinct from
- *      "Expense" (TAD-003 §11.2) — this is the primary, most reliable signal.
+ *   1. transaction_type: the primary, most reliable signal.
  *   2. primary_category name: a defensive backstop for rows where transaction_type
  *      might not be set correctly, or a category name itself unambiguously names a
  *      money movement regardless of type.
@@ -17,8 +16,15 @@
  * happened, where seeing a credit card payment is legitimate information. Only
  * apply this where the surface is specifically expense analytics.
  */
+import { TRANSACTION_TYPES } from "@/constants/transaction-types";
 
-const NON_EXPENSE_TRANSACTION_TYPES = new Set(["Payment", "Transfer"]);
+/**
+ * Legacy Title Case values ("Payment", "Transfer", "Lending") have been migrated to the
+ * Transaction Type Architecture's five-value uppercase set (docs/database/migrations/017
+ * — all mapped to TRANSFER) and the CHECK constraint is now fully validated, so no
+ * fallback for the old strings is needed here anymore.
+ */
+const NON_EXPENSE_TRANSACTION_TYPES = new Set<string>([TRANSACTION_TYPES.TRANSFER]);
 
 const NON_EXPENSE_CATEGORIES = new Set([
   "Financial",

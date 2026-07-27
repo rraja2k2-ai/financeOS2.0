@@ -37,6 +37,7 @@ import type { Account } from "@/domain/account";
 import type { Project } from "@/domain/project";
 import { receiptFolder, extForMime } from "./receipt-path";
 import { createStageTimer, type StageTimer } from "@/lib/perf-timer";
+import { TRANSACTION_TYPES, type TransactionType } from "@/constants/transaction-types";
 
 export type ReviewedHeader = {
   merchant: string;
@@ -46,7 +47,36 @@ export type ReviewedHeader = {
   account: string;
   project: string;
   notes: string;
+  /** Transaction Type Intelligence Pipeline — AI-classified, user-editable in Review. */
+  transactionType: TransactionType;
+  /** Transaction Type Intelligence Part 2 — the account the money moved INTO, for
+   *  TRANSFER/INCOME. Empty string when none was identified (external party, or not
+   *  applicable to this type) — resolved to target_account_id at save time exactly like
+   *  `account` resolves to source_account_id; never a hard requirement (an external
+   *  destination, e.g. lending to a person, is a legitimate null). */
+  destinationAccount: string;
 };
+
+/** EXPENSE and REFUND always have a real counterparty to name; INCOME/TRANSFER/ADJUSTMENT
+ *  frequently don't (a bank transfer, an ATM withdrawal, a balance correction) — see the
+ *  Transaction Type Intelligence Part 2 milestone's type-aware validation matrix. */
+export function merchantRequiredFor(type: TransactionType): boolean {
+  return type === TRANSACTION_TYPES.EXPENSE || type === TRANSACTION_TYPES.REFUND;
+}
+
+/**
+ * Transaction Type Finalization — merchant is reused for every type (no new column), but
+ * an Internal Transfer (destination resolves to one of the user's own accounts) needs no
+ * counterparty name at all: source + destination already say everything. Forces merchant
+ * empty in that one case regardless of what the field holds, so a stale/AI-leftover value
+ * never persists for a field the Review Screen hides. Every other case (including an
+ * External Transfer, where merchant genuinely holds the external party's name) passes
+ * through unchanged. Shared by save and update — never duplicated.
+ */
+export function resolveMerchantForSave(type: TransactionType, merchant: string, destinationAccountId: string | null): string {
+  if (type === TRANSACTION_TYPES.TRANSFER && destinationAccountId !== null) return "";
+  return merchant.trim();
+}
 
 export type ReviewedItem = {
   description: string;
@@ -54,6 +84,12 @@ export type ReviewedItem = {
   amount: string;
   primaryCategory: string;
   secondaryCategory: string;
+  /** Receipt Intelligence Foundation — new, nullable item attributes. No UI edits these
+   *  yet (TransactionItemRow accepts but doesn't display them); always null until a
+   *  future milestone (AI extraction, manual entry) populates them. */
+  unit?: string | null;
+  packSize?: string | null;
+  unitPrice?: number | null;
 };
 
 export type ReviewedCapture = {
@@ -114,7 +150,13 @@ export async function saveReviewedCapture(
     Promise.all([accountRepository.list(supabase), projectRepository.list(supabase)])
   );
   const mappingStart = performance.now();
-  const { sourceAccountId, projectId } = resolveAccountAndProjectIds(accounts, projects, reviewed.header.account, reviewed.header.project);
+  const { sourceAccountId, projectId, destinationAccountId } = resolveAccountAndProjectIds(
+    accounts,
+    projects,
+    reviewed.header.account,
+    reviewed.header.project,
+    reviewed.header.destinationAccount
+  );
   // Account mapping and project mapping are one in-memory lookup function, not two
   // separate operations — both land here, both effectively instant (array .find(), no I/O).
   timer.mark("Account & Project Mapping", performance.now() - mappingStart);
@@ -165,11 +207,11 @@ export async function saveReviewedCapture(
     header: {
       receipt_id: receiptId,
       transaction_date: transactionDate,
-      merchant: reviewed.header.merchant.trim(),
-      transaction_type: "Expense",
+      merchant: resolveMerchantForSave(reviewed.header.transactionType, reviewed.header.merchant, destinationAccountId),
+      transaction_type: reviewed.header.transactionType,
       primary_category: dominantCategory(reviewed.items),
       source_account_id: sourceAccountId,
-      target_account_id: null,
+      target_account_id: destinationAccountId,
       project_id: projectId,
       currency,
       original_amount: grandTotal,
@@ -187,7 +229,12 @@ export async function saveReviewedCapture(
       secondary_category: item.secondaryCategory.trim() || null,
       // Qty is saved exactly as displayed ("0.5 kg", "2 pcs") — descriptive text, never math.
       qty: item.qty.trim(),
-      unit_price: null,
+      // Receipt Intelligence Foundation — always null today (nothing infers or edits
+      // them yet), but threaded through so a future milestone doesn't need to touch
+      // this mapping again.
+      unit: item.unit ?? null,
+      pack_size: item.packSize ?? null,
+      unit_price: item.unitPrice ?? null,
       item_total: round2(Number(item.amount) || 0),
     })),
   };
@@ -220,28 +267,44 @@ export async function saveReviewedCapture(
   return { headerId, receiptId };
 }
 
+/**
+ * Type-aware validation (Transaction Type Intelligence Part 2) — the one rule function
+ * shared by save, update, and the Review Screen's own client-side check, so the
+ * merchant-required rule is never duplicated three different ways.
+ */
+export function validateForType(reviewed: ReviewedCapture): string[] {
+  const errors: string[] = [];
+  if (merchantRequiredFor(reviewed.header.transactionType) && !reviewed.header.merchant.trim()) errors.push("Merchant cannot be empty.");
+  if (reviewed.items.length === 0) errors.push("At least one line item is required.");
+  if (reviewed.items.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) errors.push("Amounts cannot be negative.");
+  return errors;
+}
+
 function validate(reviewed: ReviewedCapture): void {
-  if (!reviewed.header.merchant.trim()) throw new SaveValidationError("Merchant cannot be empty.");
-  if (reviewed.items.length === 0) throw new SaveValidationError("At least one line item is required.");
-  if (reviewed.items.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) throw new SaveValidationError("Amounts cannot be negative.");
+  const [firstError] = validateForType(reviewed);
+  if (firstError) throw new SaveValidationError(firstError);
 }
 
 /**
  * Resolves the Review screen's account/project NAME fields to FK ids — the exact same
  * logic used at create time, reused unchanged by Fix 3's transaction-edit path so
- * account/project resolution is never duplicated.
+ * account/project resolution is never duplicated. `destinationAccountName` resolves the
+ * same way as `accountName` (an unmatched/empty name -> null id, never an error) — an
+ * unresolved destination is a legitimate external party, not a validation failure.
  */
 export function resolveAccountAndProjectIds(
   accounts: Account[],
   projects: Project[],
   accountName: string,
-  projectName: string
-): { sourceAccountId: string | null; projectId: string | null } {
+  projectName: string,
+  destinationAccountName = ""
+): { sourceAccountId: string | null; projectId: string | null; destinationAccountId: string | null } {
   const sourceAccountId = accounts.find((a) => a.account_name === accountName)?.id ?? null;
+  const destinationAccountId = accounts.find((a) => a.account_name === destinationAccountName)?.id ?? null;
   const resolvedProjectName = projectName.trim() || GENERIC_PROJECT_NAME;
   const projectId =
     projects.find((p) => p.project_name === resolvedProjectName)?.id ?? projects.find((p) => p.project_name === GENERIC_PROJECT_NAME)?.id ?? null;
-  return { sourceAccountId, projectId };
+  return { sourceAccountId, projectId, destinationAccountId };
 }
 
 /** Header category = the item category with the highest total spend. */
@@ -375,6 +438,8 @@ async function persistWithCompensation(supabase: SupabaseClient, payload: Payloa
           // Nullable columns: pass null (not "") — "" is invalid for the numeric unit_price.
           secondary_category: (item.secondary_category ?? null) as unknown as string,
           qty: item.qty,
+          unit: item.unit,
+          pack_size: item.pack_size,
           unit_price: (item.unit_price === null ? null : String(item.unit_price)) as unknown as string,
           item_total: String(item.item_total),
         });

@@ -93,3 +93,20 @@ export function isKnownCategory(primaryCategory: string, secondaryCategory?: str
   if (!secondaryCategory) return true;
   return entries.some((e) => e.subcategories.includes(secondaryCategory));
 }
+
+/**
+ * Classifies a (primary, secondary) pair by this taxonomy's categoryType. Only
+ * "Investments" appears on both sides — disambiguated by secondary category (e.g.
+ * "Stock Dividends" is income, "Gold Investments" is expense); every other primary
+ * category has exactly one categoryType, so secondary is irrelevant there. Falls back
+ * to "expense" for anything unrecognized — the same "don't silently exclude" default
+ * isExpenseCategory() already uses elsewhere in this codebase, not a new convention.
+ */
+export function categoryTypeFor(primaryCategory: string | null, secondaryCategory?: string | null): CategoryType {
+  if (!primaryCategory) return "expense";
+  const entries = CATEGORY_TAXONOMY.filter((c) => c.primary === primaryCategory);
+  if (entries.length === 0) return "expense";
+  if (entries.length === 1) return entries[0].categoryType;
+  const bySecondary = secondaryCategory ? entries.find((e) => e.subcategories.includes(secondaryCategory)) : undefined;
+  return (bySecondary ?? entries[0]).categoryType;
+}

@@ -25,24 +25,6 @@ export async function list(supabase: SupabaseClient): Promise<TransactionHeader[
   return data || [];
 }
 
-/** The single most recently CAPTURED header (transaction_headers.created_at) — used to
- *  find "the transaction a just-finished background capture became," never by the
- *  receipt's own printed date. */
-export async function getLatest(supabase: SupabaseClient): Promise<TransactionHeader | null> {
-  const { data, error } = await supabase
-    .from("transaction_headers")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
-}
-
 /** Most recent `limit` headers by CAPTURE time (transaction_headers.created_at), for the
  *  Dashboard's "Recent Transactions" card — never by the receipt's own printed date. See
  *  CLAUDE.md §7. */
@@ -77,6 +59,52 @@ export async function listByDateRange(
   }
 
   return data || [];
+}
+
+/**
+ * Headers sourced from one account (transaction_headers.source_account_id), optionally
+ * bounded by transaction_date and/or capped to the newest N — for the Account Detail
+ * page's period summary (no limit) and Recent Transactions preview (limit: 5), so the
+ * preview never pulls more rows than it displays.
+ */
+export async function listByAccountId(
+  supabase: SupabaseClient,
+  accountId: string,
+  options: { startDate?: string; endDate?: string; limit?: number } = {}
+): Promise<TransactionHeader[]> {
+  let query = supabase
+    .from("transaction_headers")
+    .select("*")
+    .eq("source_account_id", accountId)
+    .order("transaction_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (options.startDate) query = query.gte("transaction_date", options.startDate);
+  if (options.endDate) query = query.lte("transaction_date", options.endDate);
+  if (options.limit) query = query.limit(options.limit);
+
+  const { data, error } = await query;
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}
+
+/** Whether ANY transaction references this account, as source or target (e.g. a transfer
+ *  into it) — used to block permanent account deletion (Delete Protection); Archive is
+ *  always safe as the alternative regardless of this result. */
+export async function existsForAccountId(supabase: SupabaseClient, accountId: string): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("transaction_headers")
+    .select("id", { count: "exact", head: true })
+    .or(`source_account_id.eq.${accountId},target_account_id.eq.${accountId}`);
+
+  if (error) {
+    throw error;
+  }
+
+  return (count ?? 0) > 0;
 }
 
 /** All headers assigned to one project (for the Project module's analytics + drill-down). */

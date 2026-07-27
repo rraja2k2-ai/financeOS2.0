@@ -129,6 +129,19 @@ project, and monitor accounts and investments.
 - **The schema is considered stable.** Do not create new tables or columns
   unless a new business capability genuinely requires them. Prefer reusing
   existing tables/architecture before proposing a schema change.
+- **`transaction_items` carries three reserved, nullable item-attribute
+  columns for future Receipt Intelligence — `unit`, `pack_size`, and
+  `unit_price`** (migration 018; `unit_price` existed earlier and already
+  round-tripped through `save_transaction`). All three are foundation only:
+  every layer (domain type, repositories, `CreateTransactionInput`,
+  `ReviewedItem`, `ItemDraft`/`TransactionItemRow`) can carry them, but
+  nothing infers or calculates them, no UI shows or edits them yet, and
+  `updateReviewedTransaction` deliberately never includes them in its
+  per-item update payload — so an edit-save can never null out a value a
+  future milestone eventually writes. They stay NULL on every row until an
+  actual AI-extraction, manual-entry, or Workspace-UI milestone populates
+  them; that milestone should add to this foundation, not build a second
+  item-attribute path.
 
 - Receipt **images/PDFs are stored only in Supabase Storage** (`receipts`
   bucket), never in the database and never as Base64 in any column. The
@@ -144,6 +157,13 @@ project, and monitor accounts and investments.
   single uniform access pattern (the app always needs full CRUD on it, no
   verb is restricted differently than another). Do not fragment it into
   per-verb policies without a concrete reason.
+- `accounts` has **no `institution` or `account_number` columns** — decided
+  twice now (Account Detail, then Settings Accounts Management) not to add
+  them. Account status is **Active/Inactive only** (reused for Archive/
+  Restore — "Archived" in the UI is stored as `status: "Inactive"`, the
+  same convention Projects already uses; there is no separate "Archived"
+  status value and no schema change for it). Do not reintroduce either
+  field or a new status value without a fresh decision.
 - `account_mapping_rules` is a **separate table from `categorization_rules`**
   and must stay separate. `categorization_rules` maps merchant text →
   category (and carries a category-specific account hint).
@@ -156,6 +176,72 @@ project, and monitor accounts and investments.
   setting doesn't fit there). Do not recreate a generic `app_settings`
   table — if a new global setting is needed, add a column to the table it
   actually belongs to, or propose a specifically-named table for it.
+- **`transaction_headers.transaction_type` supports exactly five values —
+  `EXPENSE`, `INCOME`, `TRANSFER`, `REFUND`, `ADJUSTMENT`** (uppercase),
+  defined once in `constants/transaction-types.ts` (`TRANSACTION_TYPES`,
+  `TransactionType`, `TRANSACTION_TYPE_LABELS`,
+  `MERCHANT_FIELD_LABELS`) — every future consumer (validation, UI,
+  Gemini prompt) must reuse this file, never a new literal. No other
+  transaction type may be introduced; scenarios like Investment, Loan,
+  Cash Withdrawal/Deposit, Credit Card Payment, Lending, Dividend, or
+  Interest are modeled as one of these five (typically `TRANSFER`), not as
+  new types. `merchant` is reused as-is for all five — only its UI label
+  changes per type (`MERCHANT_FIELD_LABELS`); no `external_party`/
+  `counterparty` column was added. A `CHECK` constraint enforcing this set
+  is live and fully validated (migration 017) — legacy Title Case values
+  (`Expense`, `Payment`, `Transfer`, `Lending`) have been migrated
+  (`Expense`→`EXPENSE`; `Payment`/`Transfer`/`Lending`→`TRANSFER`, since
+  all 7 non-Expense rows were either an internal move between two of your
+  own accounts or an external party with one side null) — no legacy value
+  remains in the database, and `lib/expense-filter.ts` no longer carries a
+  legacy-string fallback. **All five types now flow end-to-end** (Transaction
+  Type Intelligence Pipeline milestone): Gemini classifies `transactionType`
+  as part of its single extraction call (`prompts/receipt-processing.prompt.ts`,
+  `CaptureReceiptResult.header.transactionType`), `normalizeReceiptResult()`
+  defaults a missing/invalid value to `EXPENSE` rather than throwing, the
+  Review Screen (one shared screen, see §7) has a `Type` selector next to
+  Currency/Account/Project (default `EXPENSE`, editable), and
+  `saveReviewedCapture()`/`updateReviewedTransaction()` persist whatever
+  value is selected instead of a hardcoded literal. Editing an existing
+  transaction loads and can change its `transaction_type` like any other
+  field. **Validation is type-aware** (Transaction Type Intelligence Part 2,
+  `services/capture/save-capture.service.ts`'s `merchantRequiredFor()` /
+  `validateForType()` — one shared rule function, used by save, update, and
+  the Review Screen's own client-side check): merchant is required only for
+  `EXPENSE`/`REFUND`; `INCOME`/`TRANSFER`/`ADJUSTMENT` may save with an
+  empty merchant (a bank transfer, an ATM withdrawal, a balance correction
+  rarely has a natural counterparty name). **Destination account now flows
+  end-to-end too**: Gemini returns `headerSuggestions.destinationAccount`
+  (an exact `ACCOUNTS` name, or null) alongside the existing source
+  `account` suggestion, for `TRANSFER`/`INCOME` only; the Review Screen
+  shows a `Destination` selector (same `MetaPill`/account-select pattern as
+  `Account`) only when the selected type is `TRANSFER` or `INCOME`; save/
+  update resolve it to `target_account_id` exactly like `account` resolves
+  to `source_account_id` — an unmatched or absent name resolves to `null`,
+  never a validation failure, since an external destination (lending to a
+  person, an outside party) is legitimate, not an error. Editing preserves
+  and can change the destination like any other field.
+
+  **`merchant` is finalized as one reused column for all five types — no
+  new column was added** (Transaction Type Finalization milestone). Its UI
+  label switches per type via `constants/transaction-types.ts`'s
+  `MERCHANT_FIELD_LABELS` (`EXPENSE`/`REFUND` → "Merchant", `INCOME` →
+  "Received From", `TRANSFER` → "External Party", `ADJUSTMENT` →
+  "Reference"). `TRANSFER` has no stored "internal vs external" flag —
+  it's derived purely from whether `target_account_id` resolves to a real
+  account: an **Internal Transfer** (destination resolves) hides the
+  merchant field entirely in the Review Screen and forces `merchant` empty
+  at save regardless of what the field held
+  (`save-capture.service.ts`'s `resolveMerchantForSave()`, shared by save
+  and update — never duplicated); an **External Transfer** (no destination,
+  or an unresolved name) shows the field labeled "External Party", holding
+  the external party's name, optional. The AI prompt teaches Gemini this
+  same per-type meaning for the existing `header.merchant` field — no new
+  output field was introduced. **Still out of scope** (separate,
+  not-yet-scoped milestones): a hard requirement that a destination account
+  be selected (it stays optional by design), Receivables/external-contact
+  tracking for the external case, and account balance posting
+  (`accounts.current_balance` is still never updated by any transaction).
 
 ---
 
@@ -272,6 +358,35 @@ reused for the whole session — no repeated queries mid-session.
 - **Never hardcode account names, category names, or project names**
   anywhere in application code, prompts, or fallback logic. They come from
   the database via master data, full stop.
+- **Item extraction contract (Gemini Receipt Intelligence Contract) — facts
+  only, never calculated, normalized, or inferred.** Every item carries
+  `qty`, `unit`, `packSize`, and `unitPrice` (`CaptureReceiptResult.items[]`,
+  `services/ai/ai-provider.ts`), each null unless the receipt (or user
+  context) states it directly:
+  - `qty` — how many of `unit` were bought (a discrete count), or the
+    measured amount itself for a loose/variable-weight item.
+  - `unit` — the discrete package word ("bag", "bottle", "pack", "box",
+    "can", "tray", "bundle", "pair", "set", "pc") for a pre-packaged item,
+    or the measure itself ("kg", "g", "L", "ml") for a loose/variable-weight
+    item with no fixed package.
+  - `packSize` — the pre-packaged size exactly as printed ("5 kg", "2 L").
+    Only exists for a pre-packaged item; a loose/variable-weight item has
+    none, since `qty`+`unit` already **are** the measured amount.
+  - `unitPrice` — the per-unit rate exactly as printed (e.g. "$8.40/kg" →
+    `8.40`). Never `lineAmount ÷ qty` — null when no rate is printed.
+  - **Packaged vs. variable-weight, the one distinction that matters most:**
+    "Ponni Rice 5 kg" is a packaged product — its printed size describes the
+    *package*, so `qty=1, unit="bag", packSize="5 kg"`, never
+    `qty=5, unit="kg"`. "Chicken 1.356 kg" is variable-weight — the printed
+    number *is* what was measured and bought, so `qty=1.356, unit="kg",
+    packSize=null`.
+  - These fields are extracted and persist (see §4's `transaction_items`
+    columns) but are **not yet shown or editable anywhere in the UI** — that
+    is a future Receipt Intelligence UI milestone, not this contract.
+    `docs/ai/receipt-item-contract-examples.md` is the permanent worked-
+    example catalogue (packaged/variable-weight/liquids/multi-packs/loose
+    produce/meat/fish/eggs/rice/milk/bakery/cleaning/household) a future
+    prompt-tuning pass should regression-test against.
 
 ---
 
@@ -286,19 +401,37 @@ reused for the whole session — no repeated queries mid-session.
   user explicitly asks for it (the Capture success card's **Review
   Transaction** button, below, or manually later via Activity).
 - **One Review Screen, reused — Edit-only, opened only by hand.** The same
-  Review Screen component that once gated every capture now only edits an
-  already-saved transaction — whether opened from Activity's `⋮ → Edit`,
-  or from the Capture success card's **Review Transaction** button right
-  after a fresh capture. There is no second editor anywhere in the app.
-  Any future "edit" surface must route through this one component,
-  reshaping existing data to look like a fresh AI result rather than
-  building a parallel form.
+  Review Screen component (`ReviewScreen.tsx`, the reusable Transaction
+  Workspace foundation) that once gated every capture now only edits an
+  already-saved transaction — opened from Activity's `⋮ → Edit`, Dashboard
+  Recent Transactions' `⋮ → Edit`, Account Detail's Recent Transactions
+  `⋮ → Edit`, or the Capture success card's **Review Transaction** button
+  right after a fresh capture. All four entry points share one
+  `hooks/useTransactionEditor.ts` hook for the fetch-master-data /
+  fetch-transaction / save / delete sequence — never re-implemented per
+  screen. There is no second editor anywhere in the app. Any future "edit"
+  surface must reuse this hook and this component, reshaping existing data
+  to look like a fresh AI result rather than building a parallel form. The
+  screen also shows Capture Date (`transaction_headers.created_at`)
+  read-only next to Receipt Date, and offers **Delete Transaction** itself
+  (confirm-then-delete, same `DELETE /api/transactions/[id]` every entry
+  point already used) — so any screen that can open the editor gets delete
+  for free without its own delete UI.
 - **Activity is the source of truth** for what has been saved. Once a
-  transaction is saved, Activity is where it lives, is displayed, is edited,
-  viewed (its original receipt), and is deleted from — not a second
-  parallel transaction list. Activity refreshes itself automatically when a
-  background capture finishes, newest transaction first — the user is never
-  required to manually reload to see it.
+  transaction is saved, Activity is where it lives, is displayed, and is
+  viewed (its original receipt) — deletion is no longer Activity-only:
+  Activity's own card menu still has a direct Delete, and the Review
+  Screen's Delete Transaction (above) reaches every other entry point.
+  Editing can also be triggered directly from Dashboard's Recent
+  Transactions and Account Detail's Recent Transactions (same Review
+  Screen, same `PUT /api/transactions/[id]` save path) as a shortcut so the
+  user never has to open Activity just to fix an OCR mistake; that
+  endpoint's response also carries a `recentTransaction` summary (an
+  additive field Activity's own save handler ignores) so Dashboard can
+  patch just that one card in place instead of calling `router.refresh()`.
+  Activity refreshes itself automatically when a background capture
+  finishes, newest transaction first — the user is never required to
+  manually reload to see it.
 - **Capture success experience — no automatic navigation, ever.** The
   Capture Modal owns detecting its own capture finishing while it's open:
   it polls its own just-queued `capture_queue` row directly
@@ -463,6 +596,67 @@ transaction system of record, RLS with granular per-verb policies.
   step, no eligibility/confidence gating — see §5/§7).
 - Capture success experience (progress timeline + success card, Review
   Transaction / Done choice, no automatic navigation — see §7).
+- Account Detail (`/accounts/[id]`) — drill-down page per account with a
+  period-scoped Income/Expenses/Net Change/Transaction Count summary and a
+  5-row Recent Transactions preview, both reusing Activity's extracted
+  `TransactionCard` component (`components/activity/TransactionCard.tsx`).
+  Clicking a preview row, or "See All Transactions," navigates to Activity
+  with `?account=<id>&period=<key>` (plus `&highlight=<id>` for a single
+  row) pre-applied; Activity reads these alongside its existing
+  `?highlight`/`?edit` params to narrow its list and auto-apply the period
+  instead of its own highlight-driven default.
+- Settings → Accounts Management — full CRUD on `accounts` from
+  `/settings/accounts` (`SettingsAccountsView.tsx` → `app/settings/accounts/
+  actions.ts` → `services/finance/account-management.service.ts` →
+  `repositories/account.repository.ts`): Add/Edit (name/type/currency/
+  opening balance/notes, with duplicate-name and blank/invalid-balance
+  validation), Archive/Restore (reuses `status`, see §4 — needs no changes
+  to Dashboard/Capture/Accounts, which already filter `status === "Active"`),
+  and Delete (blocked with an inline message if the account has any
+  transaction history as source or target; Archive is offered instead).
+- Dashboard Category Drill-down — the Dashboard's own inline "Top
+  Categories" card (a pre-existing separate implementation from the shared
+  `TopCategoriesCard` used by Activity — left as-is, not consolidated, so
+  the Dashboard's exact visual design stayed untouched) gained click-to-
+  navigate: a subcategory row links to Activity with `?category=<primary>
+  &subcategory=<secondary>&period=this-month`; a "View all {category} →"
+  link (shown once expanded, alongside the subcategory rows) links with
+  `?category=<primary>` only. The category row's own click still only
+  expands/collapses in place, same as before — Dashboard has no period
+  selector of its own, so `period` is always `this-month`. Activity now
+  also reads `?category`/`?subcategory` (alongside `?account`/`?period`),
+  matching whole transactions that have at least one item in that primary
+  (and secondary, if given) category — same chip-plus-Clear pattern as the
+  account filter, same underlying data (`ActivityTransaction.items`), no
+  new repository or service query.
+- Dashboard Recent Transactions Edit Action — each Dashboard Recent
+  Transactions card gained the same portal-based `⋮` overflow menu style
+  as Activity's own cards, with two items in order: Edit, then View in
+  Activity (unchanged `?highlight=<id>` link). Edit opens the same shared
+  Review Screen used everywhere else — see §7's "One Review Screen,
+  reused." Save patches just that one card's local state from the
+  `PUT /api/transactions/[id]` response's new `recentTransaction` field;
+  Dashboard never calls `router.refresh()` for this, so the rest of the
+  Dashboard (Today's Pulse, Top Categories, other cards) never re-fetches
+  just because one transaction was edited.
+- **Transaction Workspace Foundation** — the Review Screen became the
+  reusable foundation for all future transaction editing (see §7's "One
+  Review Screen, reused"): a fourth entry point (Account Detail's Recent
+  Transactions `⋮ → Edit`, previously the only list with no edit
+  affordance) was wired up, Delete Transaction moved into the Review
+  Screen itself (confirm-then-delete, reusing the existing DELETE API),
+  Capture Date joined Receipt Date as a read-only header field, and the
+  duplicated fetch/save/delete orchestration that Activity and Dashboard
+  each carried separately was extracted into one `useTransactionEditor`
+  hook (`hooks/useTransactionEditor.ts` — the app's first shared React
+  hook; existing screens kept their own post-save behavior — Activity
+  toasts + refreshes, Dashboard/Account Detail patch or refresh locally —
+  via the hook's callback options, not a forced single strategy). The line
+  item row was extracted into `TransactionItemRow.tsx` so a future
+  Receipt Intelligence milestone (Quantity/Unit/Pack Size/Unit Price) can
+  extend one component instead of restructuring the Review Screen. No
+  Transaction Types, receipt-image display, or line-item add/delete were
+  introduced — explicitly out of scope for this milestone.
 
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.

@@ -36,6 +36,9 @@ export type CreateTransactionInput = {
     primary_category: string;
     secondary_category: string | null;
     qty: string;
+    /** Receipt Intelligence Foundation — always null until a future milestone populates them. */
+    unit: string | null;
+    pack_size: string | null;
     unit_price: number | null;
     item_total: number;
   }[];

@@ -32,6 +32,11 @@ export type ActivityTransaction = {
   id: string;
   receiptId: string;
   merchant: string | null;
+  /** The paying account (transaction_headers.source_account_id) — null for legacy rows
+   *  captured before Simple Account Mapping Rules. Powers Account Detail's cross-link
+   *  into Activity filtered to one account (CLAUDE.md's "Activity is the source of
+   *  truth" — this never gains its own account-scoped edit path). */
+  sourceAccountId: string | null;
   /** Receipt/business date (transaction_headers.transaction_date) — the primary date
    *  Activity sorts, groups, and filters by. See CLAUDE.md §7. */
   transactionDate: string;
@@ -50,10 +55,10 @@ export type ActivityTransaction = {
   items: ActivityItem[];
 };
 
-/** Shared header+items → ActivityTransaction shaping, used by both getActivity's bulk
- *  path and getActivityWithHighlight's single-transaction top-up (Fix 7.0) — never
- *  duplicated between them. */
-function toActivityTransaction(header: TransactionHeader, items: TransactionItem[]): ActivityTransaction {
+/** Shared header+items → ActivityTransaction shaping, used by getActivity's bulk path,
+ *  getActivityWithHighlight's single-transaction top-up (Fix 7.0), and Account Detail's
+ *  Recent Transactions (account-detail.service.ts) — never duplicated between them. */
+export function toActivityTransaction(header: TransactionHeader, items: TransactionItem[]): ActivityTransaction {
   const activityItems: ActivityItem[] = items.map((it) => ({
     id: it.id,
     description: it.item_description,
@@ -68,6 +73,7 @@ function toActivityTransaction(header: TransactionHeader, items: TransactionItem
     id: header.id,
     receiptId: header.receipt_id,
     merchant: header.merchant,
+    sourceAccountId: header.source_account_id,
     transactionDate: header.transaction_date,
     capturedAt: header.created_at,
     currency: header.currency,
@@ -162,14 +168,17 @@ export type RecentTransaction = {
   originalAmount: number;
   sgdAmount: number;
   currencyGroup: "SGD" | "INR";
+  /** Expense | Payment | Transfer | Lending (TAD-003 §11.2) — powers Dashboard's compact
+   *  Recent Transactions card's type label/icon. Already present on the same header row
+   *  listRecent fetches; no additional query. */
+  transactionType: string;
 };
 
-/** Lightweight header-only feed for the Dashboard's Recent Transactions card — no items fetch.
- *  Ordered by capture time (listRecent), never the receipt's own printed date. */
-export async function getRecentTransactions(supabase: SupabaseClient, limit: number): Promise<RecentTransaction[]> {
-  const headers = await transactionHeaderRepository.listRecent(supabase, limit);
-
-  return headers.map((header) => ({
+/** Shared header -> RecentTransaction shaping, used by both the list (getRecentTransactions)
+ *  and the single-row refresh (getRecentTransactionById, Dashboard Recent Transactions
+ *  Edit Action) — never duplicated between them. */
+function toRecentTransaction(header: TransactionHeader): RecentTransaction {
+  return {
     id: header.id,
     merchant: header.merchant,
     transactionDate: header.transaction_date,
@@ -179,7 +188,23 @@ export async function getRecentTransactions(supabase: SupabaseClient, limit: num
     originalAmount: Number(header.original_amount),
     sgdAmount: Number(header.sgd_total_amount),
     currencyGroup: header.currency === "INR" ? "INR" : "SGD",
-  }));
+    transactionType: header.transaction_type,
+  };
+}
+
+/** Lightweight header-only feed for the Dashboard's Recent Transactions card — no items fetch.
+ *  Ordered by capture time (listRecent), never the receipt's own printed date. */
+export async function getRecentTransactions(supabase: SupabaseClient, limit: number): Promise<RecentTransaction[]> {
+  const headers = await transactionHeaderRepository.listRecent(supabase, limit);
+  return headers.map(toRecentTransaction);
+}
+
+/** Single-row equivalent of getRecentTransactions — used to refresh just the one card
+ *  Dashboard's Edit action just saved, instead of re-fetching (or re-rendering) the
+ *  whole Dashboard. Returns null if the transaction no longer exists. */
+export async function getRecentTransactionById(supabase: SupabaseClient, id: string): Promise<RecentTransaction | null> {
+  const header = await transactionHeaderRepository.getById(supabase, id);
+  return header ? toRecentTransaction(header) : null;
 }
 
 /**

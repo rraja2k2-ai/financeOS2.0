@@ -1,16 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { ArrowLeftRight, Receipt as ReceiptTypeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NetCashPosition } from "@/services/finance/net-cash.service";
-import type { CategorySpend } from "@/services/finance/category-spend.service";
 import type { RecentTransaction } from "@/services/finance/activity.service";
+import { categoryIcon } from "@/constants/category-icons";
+import { TRANSACTION_TYPES } from "@/constants/transaction-types";
+import { ReviewScreen } from "@/components/capture/ReviewScreen";
+import { useTransactionEditor } from "@/hooks/useTransactionEditor";
 
 export type DashboardViewProps = {
   monthLabel: string;
   netCash: NetCashPosition;
-  categorySpend: CategorySpend[];
   budget: {
     budgetedSgd: number;
     spentSgd: number;
@@ -24,15 +29,58 @@ function fmt(n: number, decimals = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-export function DashboardView({ monthLabel, netCash, categorySpend, budget, recentTransactions }: DashboardViewProps) {
+export function DashboardView({ monthLabel, netCash, budget, recentTransactions: initialRecentTransactions }: DashboardViewProps) {
+  const router = useRouter();
   const [hidden, setHidden] = useState(false);
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
-  const maxCategorySgd = categorySpend[0]?.sgdAmount ?? 1;
+  // Local copy so a saved Edit can patch just the one affected card (§4/§8 — no
+  // router.refresh(), no re-querying the rest of the Dashboard's data).
+  const [recentTransactions, setRecentTransactions] = useState<RecentTransaction[]>(initialRecentTransactions);
+  const [menuAnchor, setMenuAnchor] = useState<{ id: string; rect: DOMRect } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Edit/Save/Delete orchestration (fetch master data lazily, fetch the transaction, save,
+  // delete) is shared via useTransactionEditor (Transaction Workspace Foundation) — the
+  // same hook Activity and Account Detail use. Master data isn't passed in (unlike
+  // Activity's server-loaded copy) — the hook lazy-fetches it itself on first Edit, same
+  // as this screen already did (§8 Performance: not eagerly on every Dashboard visit).
+  const {
+    masterData,
+    editing,
+    loadingId: editLoadingId,
+    openEditor: handleEdit,
+    closeEditor,
+    saveEditor,
+    deleteEditor,
+  } = useTransactionEditor({
+    onSaved: (updated) => {
+      if (updated) setRecentTransactions((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    },
+    onDeleted: (headerId) => {
+      setRecentTransactions((prev) => prev.filter((t) => t.id !== headerId));
+    },
+    onError: setActionError,
+  });
+
+  // A floating, position-computed menu goes stale if the page scrolls or resizes under
+  // it — same fix as Activity's overflow menu (components/activity/ActivityView.tsx).
+  useEffect(() => {
+    if (!menuAnchor) return;
+    function close() {
+      setMenuAnchor(null);
+    }
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuAnchor]);
+
   const pct = budget && budget.budgetedSgd > 0 ? Math.min(100, Math.round((budget.spentSgd / budget.budgetedSgd) * 100)) : null;
 
   return (
-    <div className="px-5 pt-6">
+    <div className="px-5 pt-6" onClick={() => setMenuAnchor(null)}>
       <div className="mb-5 flex items-start justify-between">
         <div>
           <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">{today()}</p>
@@ -113,54 +161,6 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
         )}
       </section>
 
-      {/* Top Categories */}
-      <section className="mb-6">
-        <div className="mb-2.5 flex items-baseline justify-between">
-          <p className="text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Top categories · {monthLabel}</p>
-        </div>
-
-        {categorySpend.length === 0 ? (
-          <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center text-[12.5px] text-muted-foreground">
-            No transactions yet in {monthLabel}.
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
-            {categorySpend.slice(0, 7).map((cat, i) => {
-              const isOpen = expandedCategory === cat.primaryCategory;
-              return (
-                <div key={cat.primaryCategory} className={cn("p-3.5", i > 0 && "border-t border-border")}>
-                  <button
-                    className="flex w-full items-baseline justify-between text-left"
-                    onClick={() => setExpandedCategory(isOpen ? null : cat.primaryCategory)}
-                    aria-expanded={isOpen}
-                  >
-                    <span className="text-[13.5px] font-semibold">{cat.primaryCategory}</span>
-                    <span className={cn("font-mono text-[13px] font-semibold tabular-nums text-muted-foreground", hidden && "blur-sm select-none")}>
-                      SGD {fmt(cat.sgdAmount, 0)}
-                    </span>
-                  </button>
-                  <div className="mt-2 h-[5px] overflow-hidden rounded-full bg-secondary">
-                    <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(4, (cat.sgdAmount / maxCategorySgd) * 100)}%` }} />
-                  </div>
-                  {isOpen && (
-                    <div className="mt-2.5 space-y-1.5">
-                      {cat.subcategories.map((sub) => (
-                        <div key={sub.name} className="flex justify-between border-l-2 border-border py-1 pl-3.5 text-[12px] text-muted-foreground">
-                          <span>{sub.name}</span>
-                          <span className={cn("font-mono font-semibold tabular-nums text-foreground", hidden && "blur-sm select-none")}>
-                            {fmt(sub.sgdAmount, 0)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
       {/* Recent Transactions */}
       <section className="mb-6">
         <div className="mb-2.5 flex items-baseline justify-between">
@@ -175,53 +175,89 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
             No transactions yet.
           </div>
         ) : (
-          <div className="flex flex-col gap-2.5">
-            {recentTransactions.map((t) => (
-              <Link
-                key={t.id}
-                href={`/activity?highlight=${t.id}`}
-                className="block rounded-[var(--radius-lg)] border border-border bg-card p-3.5 shadow-md transition-transform active:scale-[0.99] motion-reduce:transition-none"
-              >
-                <p className="truncate text-[14.5px] font-bold leading-tight">{t.merchant || "Unknown merchant"}</p>
+          <div className="flex flex-col gap-2">
+            {recentTransactions.map((t) => {
+              const CategoryIcon = categoryIcon(t.primaryCategory);
+              const { label: typeLabel, Icon: TypeIcon } = transactionTypeMeta(t.transactionType);
+              return (
+                <div
+                  key={t.id}
+                  className="relative overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card shadow-md"
+                >
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/activity?highlight=${t.id}`)}
+                    className="flex w-full items-center gap-3 px-3 py-[26px] pr-9 text-left transition-transform active:scale-[0.98] motion-reduce:transition-none"
+                  >
+                    <div className="flex h-10 w-10 flex-none items-center justify-center rounded-[var(--radius-md)] bg-secondary text-muted-foreground">
+                      <CategoryIcon size={18} strokeWidth={2} />
+                    </div>
 
-                {/* Dates as subtle metadata (Fix 6.4.4 — both dates preserved, Receipt is
-                    the primary business date, Captured is informational only). */}
-                <div className="mt-2 flex flex-wrap items-start gap-x-5 gap-y-1.5">
-                  <div>
-                    <p className="text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground/70">Receipt</p>
-                    <p className="mt-0.5 text-[11.5px] font-semibold text-foreground">{formatReceiptDate(t.transactionDate)}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground/70">Captured</p>
-                    <p className="mt-0.5 text-[11.5px] font-medium text-muted-foreground">{formatCapturedMeta(t.capturedAt)}</p>
-                  </div>
-                </div>
+                    <div className="min-w-0 flex-1">
+                      {/* Line 1 — merchant (strongest element) + amount, same row. */}
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="truncate text-[14.5px] font-bold leading-tight">{t.merchant || "Unknown merchant"}</p>
+                        <div className={cn("flex-none text-right", hidden && "blur-sm select-none")}>
+                          {t.currencyGroup === "INR" ? (
+                            <>
+                              <div className="font-mono text-[14.5px] font-bold tabular-nums">₹{fmt(t.originalAmount)}</div>
+                              <div className="font-mono text-[9.5px] text-muted-foreground tabular-nums">≈SGD {fmt(t.sgdAmount)}</div>
+                            </>
+                          ) : t.currency === "SGD" ? (
+                            <div className="font-mono text-[14.5px] font-bold tabular-nums">SGD {fmt(t.originalAmount)}</div>
+                          ) : (
+                            <>
+                              <div className="font-mono text-[14.5px] font-bold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
+                              <div className="font-mono text-[9.5px] text-muted-foreground tabular-nums">{t.currency} {fmt(t.originalAmount)}</div>
+                            </>
+                          )}
+                        </div>
+                      </div>
 
-                {/* Category — soft pill, reduced visual weight. */}
-                <div className="mt-2.5">
-                  <span className="inline-block rounded-full bg-secondary px-2.5 py-1 text-[10.5px] font-semibold text-muted-foreground">
-                    {t.primaryCategory || "Uncategorized"}
-                  </span>
-                </div>
+                      {/* Line 2 — Receipt/Payment/Transfer + receipt date (left), compact
+                          category chip (right). transactionType is a real signal already on
+                          the header row (no "Manual" capture-method field exists in the
+                          schema without a new query, so Payment/Transfer/Receipt is the
+                          honest distinction available — see CLAUDE.md). */}
+                      <div className="mt-0.5 flex items-center justify-between gap-2">
+                        <p className="flex min-w-0 items-center gap-1 truncate text-[11px] text-muted-foreground">
+                          <TypeIcon size={10} className="flex-none" />
+                          <span className="truncate">
+                            {typeLabel} • {formatReceiptDateFull(t.transactionDate)}
+                          </span>
+                        </p>
+                        <span className="inline-flex flex-none items-center gap-1 rounded-full bg-secondary/70 px-1.5 py-[1px] text-[9.5px] font-semibold text-muted-foreground">
+                          <CategoryIcon size={9} />
+                          {t.primaryCategory || "Uncategorized"}
+                        </span>
+                      </div>
 
-                {/* Amount — the strongest visual element on the card. */}
-                <div className={cn("mt-3 border-t border-border/60 pt-2.5 text-right", hidden && "blur-sm select-none")}>
-                  {t.currencyGroup === "INR" ? (
-                    <>
-                      <div className="font-mono text-[20px] font-bold tabular-nums">₹{fmt(t.originalAmount)}</div>
-                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground tabular-nums">≈ SGD {fmt(t.sgdAmount)}</div>
-                    </>
-                  ) : t.currency === "SGD" ? (
-                    <div className="font-mono text-[20px] font-bold tabular-nums">SGD {fmt(t.originalAmount)}</div>
-                  ) : (
-                    <>
-                      <div className="font-mono text-[20px] font-bold tabular-nums">SGD {fmt(t.sgdAmount)}</div>
-                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground tabular-nums">{t.currency} {fmt(t.originalAmount)}</div>
-                    </>
-                  )}
+                      {/* Line 3 — captured date + time, year never hidden (§1/§2). */}
+                      <p className="mt-0.5 text-[10px] text-muted-foreground/70">Captured {formatCapturedFull(t.capturedAt)}</p>
+                    </div>
+                  </button>
+
+                  {/* Overflow menu (Dashboard Recent Transactions Edit Action) — same
+                      portal-based ⋮ trigger as Activity's own transaction cards. */}
+                  <button
+                    type="button"
+                    aria-label="Transaction actions"
+                    title="Transaction actions"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuAnchor(menuAnchor?.id === t.id ? null : { id: t.id, rect: e.currentTarget.getBoundingClientRect() });
+                    }}
+                    className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="5" r="1.8" />
+                      <circle cx="12" cy="12" r="1.8" />
+                      <circle cx="12" cy="19" r="1.8" />
+                    </svg>
+                  </button>
                 </div>
-              </Link>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -230,22 +266,79 @@ export function DashboardView({ monthLabel, netCash, categorySpend, budget, rece
         &quot;Needs You&quot; and &quot;The Story&quot; aren&apos;t shown yet — Needs You is genuinely empty (no pending
         captures), and Story insights need month-over-month data this partial month doesn&apos;t have yet.
       </p>
+
+      {actionError && <p className="mb-4 text-[12px] font-semibold text-destructive">{actionError}</p>}
+
+      {/* Overflow menu — portal-rendered so it's never clipped by a card's own overflow-hidden. */}
+      {menuAnchor &&
+        createPortal(
+          <div
+            className="fixed z-[85] w-44 overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card shadow-lg"
+            style={{ top: menuAnchor.rect.bottom + 4, left: Math.max(8, menuAnchor.rect.right - 176) }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              disabled={editLoadingId === menuAnchor.id}
+              onClick={() => {
+                const id = menuAnchor.id;
+                setMenuAnchor(null);
+                handleEdit(id);
+              }}
+              className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
+            >
+              {editLoadingId === menuAnchor.id ? "Loading…" : "Edit"}
+            </button>
+            <Link
+              href={`/activity?highlight=${menuAnchor.id}`}
+              onClick={() => setMenuAnchor(null)}
+              className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold"
+            >
+              View in Activity
+            </Link>
+          </div>,
+          document.body
+        )}
+
+      {/* Edit — the SAME Review screen used by Capture and Activity, populated from the
+          saved transaction. Save UPDATEs it, never creates a new one (§3/§7). Delete
+          (Transaction Workspace Foundation) removes the local card in place, same as Save. */}
+      {editing && masterData && (
+        <ReviewScreen
+          result={editing.result}
+          masterData={masterData}
+          capturedAt={editing.capturedAt}
+          onCancel={closeEditor}
+          onSave={saveEditor}
+          onDelete={deleteEditor}
+        />
+      )}
     </div>
   );
 }
 
-/** "21 Jul 2026" — Receipt Date, the primary business date (CLAUDE.md §7). */
-function formatReceiptDate(iso: string): string {
+/** "25 Jul 2026" — Receipt Date, year always shown (never abbreviated away — a card
+ *  showing "17 Jan" with no year reads as ambiguous once transactions span year
+ *  boundaries, and Recent Transactions already surfaces receipts back-dated that far). */
+function formatReceiptDateFull(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** "24 Jul • 8:42 PM" — Ingestion Date + time, shown alongside Receipt Date (Fix 6.4.4) so
- *  the card tells the user where to find this transaction inside Activity. */
-function formatCapturedMeta(iso: string): string {
+/** "25 Jul 2026 • 10:11 PM" — Captured (ingestion) date + time, year always shown. */
+function formatCapturedFull(iso: string): string {
   const d = new Date(iso);
-  const datePart = d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const datePart = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   const timePart = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   return `${datePart} • ${timePart}`;
+}
+
+/** Receipt/Payment/Transfer label + icon from transaction_type (TAD-003 §11.2). There is
+ *  no "was this a manual text entry or a scanned receipt" field in the schema — adding
+ *  one would need a new column/query, which this milestone's Performance requirement
+ *  forbids — so the honest, already-available distinction is transaction_type itself. */
+function transactionTypeMeta(type: string): { label: string; Icon: typeof ReceiptTypeIcon } {
+  if (type === TRANSACTION_TYPES.TRANSFER) return { label: "Transfer", Icon: ArrowLeftRight };
+  return { label: "Receipt", Icon: ReceiptTypeIcon };
 }
 
 function RingChart({ pct }: { pct: number }) {
