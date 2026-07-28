@@ -99,8 +99,7 @@ export function isKnownCategory(primaryCategory: string, secondaryCategory?: str
  * "Investments" appears on both sides — disambiguated by secondary category (e.g.
  * "Stock Dividends" is income, "Gold Investments" is expense); every other primary
  * category has exactly one categoryType, so secondary is irrelevant there. Falls back
- * to "expense" for anything unrecognized — the same "don't silently exclude" default
- * isExpenseCategory() already uses elsewhere in this codebase, not a new convention.
+ * to "expense" for anything unrecognized — a "don't silently exclude" default.
  */
 export function categoryTypeFor(primaryCategory: string | null, secondaryCategory?: string | null): CategoryType {
   if (!primaryCategory) return "expense";

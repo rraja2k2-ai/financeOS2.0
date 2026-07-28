@@ -5,7 +5,7 @@
  * Presentation only — no calculations, no data fetching.
  */
 import type { ReactNode } from "react";
-import { TRANSACTION_TYPES } from "@/constants/transaction-types";
+import { TRANSACTION_TYPES, TRANSACTION_TYPE_LABELS, type TransactionType } from "@/constants/transaction-types";
 
 export function fmt(n: number, decimals = 2): string {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -85,6 +85,22 @@ export function transactionTitle(t: TransactionTitleInput): string {
     default:
       return merchant ?? "Transaction";
   }
+}
+
+/**
+ * UAT Defect Fix (Posting Engine milestone) — the subtitle line next to a card's title.
+ * A non-Expense/Refund transaction's per-item category is usually just "Miscellaneous"
+ * (money-movement rows have no real spending category), which reads as a misleading
+ * label ("Miscellaneous · 1 item" on a bank transfer). For those types the transaction's
+ * own type is the honest, identifiable subtitle instead — Expense/Refund keep showing
+ * their real category, unchanged. Shared by TransactionCard (Activity + Account Detail)
+ * and Dashboard's Recent Transactions category chip so the two surfaces never diverge.
+ */
+export function subtitleCategory(transactionType: string, primaryCategory: string | null): string | null {
+  if (transactionType === TRANSACTION_TYPES.EXPENSE || transactionType === TRANSACTION_TYPES.REFUND) {
+    return primaryCategory;
+  }
+  return TRANSACTION_TYPE_LABELS[transactionType as TransactionType] ?? primaryCategory;
 }
 
 export function highlight(text: string | null | undefined, query: string): ReactNode {

@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import { currencyPrefix } from "@/lib/currency";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
-import { fmt, formatCapturedAt, formatFullDate, formatQty, highlight, transactionTitle } from "./activity-format";
+import { fmt, formatCapturedAt, formatFullDate, formatQty, highlight, subtitleCategory, transactionTitle } from "./activity-format";
 import { categoryIcon } from "@/constants/category-icons";
 
 /**
@@ -99,7 +99,7 @@ export function TransactionCard({
           <div className="min-w-0 flex-1">
             <p className="truncate text-[14.5px] font-bold leading-tight">{highlight(title, query)}</p>
             <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-              {t.primaryCategory} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
+              {subtitleCategory(t.transactionType, t.primaryCategory)} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
             </p>
           </div>
           <div className="flex-none text-right">

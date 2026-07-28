@@ -12,8 +12,11 @@ export type CaptureSuccessSummary = {
   category: string | null;
   /** Transaction UX Final Polish, Part 3 — which type-specific rows to show below. */
   transactionType: string | null;
-  /** Destination account name for TRANSFER/INCOME, or the external party name for an
-   *  External Transfer (falls back to `merchant` in that case — see CaptureModal.tsx). */
+  /** Resolved destination account name for TRANSFER/INCOME — null whenever the AI's
+   *  suggestion didn't resolve to a real account (an External Transfer, or no match).
+   *  Never displayed as a fallback to `merchant` — see typeSpecificRows() below, which
+   *  mirrors ReviewScreen's isInternalTransfer logic exactly so the two screens always
+   *  agree on what's actually resolved vs. still just raw merchant/external-party text. */
   destinationAccount: string | null;
 };
 
@@ -126,15 +129,24 @@ function typeSpecificRows(summary: CaptureSuccessSummary) {
       return (
         <>
           <SummaryRow label="Received From" value={summary.merchant ?? "—"} />
+          {summary.destinationAccount && <SummaryRow label="Destination Account" value={summary.destinationAccount} />}
           <SummaryRow label="Type" value="Income" />
         </>
       );
     case TRANSACTION_TYPES.TRANSFER:
+      // Mirrors ReviewScreen's isInternalTransfer: only show "Destination Account" when
+      // it actually resolved to a real account. Otherwise this is an External Transfer —
+      // show the merchant field under its own type label ("External Party"), never
+      // relabeled as a resolved destination that was never actually matched.
       return (
         <>
           <SummaryRow label="Type" value="Transfer" />
           <SummaryRow label="Source Account" value={summary.account ?? "—"} />
-          <SummaryRow label="Destination Account" value={summary.destinationAccount ?? summary.merchant ?? "—"} />
+          {summary.destinationAccount ? (
+            <SummaryRow label="Destination Account" value={summary.destinationAccount} />
+          ) : (
+            <SummaryRow label="External Party" value={summary.merchant ?? "—"} />
+          )}
         </>
       );
     case TRANSACTION_TYPES.REFUND:

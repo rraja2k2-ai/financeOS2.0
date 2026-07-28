@@ -10,7 +10,7 @@ import type { NetCashPosition } from "@/services/finance/net-cash.service";
 import type { RecentTransaction } from "@/services/finance/activity.service";
 import { categoryIcon } from "@/constants/category-icons";
 import { TRANSACTION_TYPES } from "@/constants/transaction-types";
-import { transactionTitle } from "@/components/activity/activity-format";
+import { subtitleCategory, transactionTitle } from "@/components/activity/activity-format";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
@@ -258,7 +258,7 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
                         </p>
                         <span className="inline-flex flex-none items-center gap-1 rounded-full bg-secondary/70 px-1.5 py-[1px] text-[9.5px] font-semibold text-muted-foreground">
                           <CategoryIcon size={9} />
-                          {t.primaryCategory || "Uncategorized"}
+                          {subtitleCategory(t.transactionType, t.primaryCategory) || "Uncategorized"}
                         </span>
                       </div>
 
