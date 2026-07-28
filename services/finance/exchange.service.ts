@@ -48,6 +48,28 @@ export async function convertToBaseCurrency(
   return { baseAmount: round2(amount / rateValue), exchangeRate: rateValue };
 }
 
+/**
+ * The reverse of convertToBaseCurrency() — converts a base-currency amount INTO a target
+ * currency's own native amount (Account Posting Engine milestone: a cross-currency
+ * Transfer's destination account needs its own-currency delta, not the base-currency
+ * one). Same table, same rate row, same "1 base = rate target" convention — never a
+ * second exchange-rate design.
+ */
+export async function convertFromBaseCurrency(supabase: SupabaseClient, baseAmount: number, currency: string): Promise<number> {
+  const baseCurrency = (await exchangeRateRepository.getBaseCurrency(supabase)) ?? DEFAULT_BASE_CURRENCY;
+
+  if (currency.toUpperCase() === baseCurrency) {
+    return round2(baseAmount);
+  }
+
+  const rate = await exchangeRateRepository.getLatestRate(supabase, currency.toUpperCase(), baseCurrency);
+  if (!rate) {
+    throw new ExchangeRateNotFoundError(currency, baseCurrency);
+  }
+
+  return round2(baseAmount * Number(rate.rate));
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }

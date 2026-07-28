@@ -5,6 +5,7 @@
  * Presentation only — no calculations, no data fetching.
  */
 import type { ReactNode } from "react";
+import { TRANSACTION_TYPES, TRANSACTION_TYPE_LABELS, type TransactionType } from "@/constants/transaction-types";
 
 export function fmt(n: number, decimals = 2): string {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -38,6 +39,68 @@ export function formatQty(qty: string): string {
   if (unitPart.trim()) return trimmed;
   const cleanedNum = numPart.includes(".") ? numPart.replace(/0+$/, "").replace(/\.$/, "") || "0" : numPart;
   return `${cleanedNum} PC`;
+}
+
+/** id -> account_name — built once per page (Dashboard/Activity/Account Detail already
+ *  load the full accounts list for their own purposes; this is a zero-extra-query
+ *  reshape), reused by transactionTitle() below wherever an internal Transfer needs a
+ *  destination account's NAME rather than its id (Transaction UX Final Polish, Part 8). */
+export function buildAccountNameMap(accounts: { id: string; account_name: string }[]): Record<string, string> {
+  return Object.fromEntries(accounts.map((a) => [a.id, a.account_name]));
+}
+
+export type TransactionTitleInput = {
+  transactionType: string;
+  merchant: string | null;
+  sourceAccountName: string | null;
+  destinationAccountName: string | null;
+};
+
+/**
+ * The ONE place a transaction's display title is generated — used by TransactionCard
+ * (Activity + Account Detail's Recent Transactions), Dashboard's own Recent Transactions
+ * card, and the Capture success card (Transaction UX Final Polish, Part 2/3/8). Never
+ * duplicated: every screen that shows a transaction title calls this function with its
+ * own already-resolved account NAMES (not ids) — see buildAccountNameMap() above for the
+ * id -> name step each id-based caller does first.
+ */
+export function transactionTitle(t: TransactionTitleInput): string {
+  const merchant = t.merchant?.trim() || null;
+  switch (t.transactionType) {
+    case TRANSACTION_TYPES.EXPENSE:
+    case TRANSACTION_TYPES.REFUND:
+      return merchant ?? "Merchant";
+    case TRANSACTION_TYPES.INCOME:
+      return merchant ?? "Income";
+    case TRANSACTION_TYPES.TRANSFER:
+      // Internal (destination resolves to one of the user's own accounts): "Source →
+      // Destination". External (no destination account — merchant holds the external
+      // party's name instead, see save-capture.service.ts's resolveMerchantForSave()).
+      if (t.destinationAccountName) {
+        return `${t.sourceAccountName ?? "Unknown Account"} → ${t.destinationAccountName}`;
+      }
+      return merchant ?? "External Transfer";
+    case TRANSACTION_TYPES.ADJUSTMENT:
+      return merchant ?? "Adjustment";
+    default:
+      return merchant ?? "Transaction";
+  }
+}
+
+/**
+ * UAT Defect Fix (Posting Engine milestone) — the subtitle line next to a card's title.
+ * A non-Expense/Refund transaction's per-item category is usually just "Miscellaneous"
+ * (money-movement rows have no real spending category), which reads as a misleading
+ * label ("Miscellaneous · 1 item" on a bank transfer). For those types the transaction's
+ * own type is the honest, identifiable subtitle instead — Expense/Refund keep showing
+ * their real category, unchanged. Shared by TransactionCard (Activity + Account Detail)
+ * and Dashboard's Recent Transactions category chip so the two surfaces never diverge.
+ */
+export function subtitleCategory(transactionType: string, primaryCategory: string | null): string | null {
+  if (transactionType === TRANSACTION_TYPES.EXPENSE || transactionType === TRANSACTION_TYPES.REFUND) {
+    return primaryCategory;
+  }
+  return TRANSACTION_TYPE_LABELS[transactionType as TransactionType] ?? primaryCategory;
 }
 
 export function highlight(text: string | null | undefined, query: string): ReactNode {

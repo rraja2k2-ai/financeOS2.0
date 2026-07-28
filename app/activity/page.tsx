@@ -3,6 +3,7 @@ import { getActivityWithHighlight } from "@/services/finance/activity.service";
 import { loadCaptureMasterData } from "@/services/capture/master-data.service";
 import { accountRepository } from "@/repositories";
 import { ActivityView } from "@/components/activity/ActivityView";
+import { buildAccountNameMap } from "@/components/activity/activity-format";
 import { todayIso, PERIOD_OPTIONS, type PeriodKey } from "@/lib/period";
 
 function isPeriodKey(value: string | undefined): value is PeriodKey {
@@ -45,10 +46,11 @@ export default async function ActivityPage({
   // the one post-capture navigation uses — always finds its target regardless of the
   // transaction's own date, never silently missing it because it falls outside the
   // default rolling window.
-  const [transactions, masterData, account_] = await Promise.all([
+  const [transactions, masterData, account_, allAccounts] = await Promise.all([
     getActivityWithHighlight(supabase, twelveMonthsAgoIso(), todayIso(), highlight),
     loadCaptureMasterData(supabase),
     account ? accountRepository.getById(supabase, account).catch(() => null) : Promise.resolve(null),
+    accountRepository.list(supabase),
   ]);
 
   return (
@@ -64,6 +66,7 @@ export default async function ActivityPage({
       initialCustomEnd={to}
       categoryFilter={category}
       subcategoryFilter={subcategory}
+      accountNameById={buildAccountNameMap(allAccounts)}
     />
   );
 }

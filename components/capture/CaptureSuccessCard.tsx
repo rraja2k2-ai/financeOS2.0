@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { TRANSACTION_TYPES } from "@/constants/transaction-types";
 
 /** Read-only summary shown on the success card — deliberately narrow, just what the card displays. */
 export type CaptureSuccessSummary = {
@@ -9,6 +10,14 @@ export type CaptureSuccessSummary = {
   transactionDate: string | null;
   account: string | null;
   category: string | null;
+  /** Transaction UX Final Polish, Part 3 — which type-specific rows to show below. */
+  transactionType: string | null;
+  /** Resolved destination account name for TRANSFER/INCOME — null whenever the AI's
+   *  suggestion didn't resolve to a real account (an External Transfer, or no match).
+   *  Never displayed as a fallback to `merchant` — see typeSpecificRows() below, which
+   *  mirrors ReviewScreen's isInternalTransfer logic exactly so the two screens always
+   *  agree on what's actually resolved vs. still just raw merchant/external-party text. */
+  destinationAccount: string | null;
 };
 
 function fmtAmount(currency: string | null, total: number | null): string {
@@ -77,12 +86,10 @@ export function CaptureSuccessCard({
             </div>
           ) : summary ? (
             <div className="divide-y divide-border">
-              <SummaryRow label="Merchant" value={summary.merchant ?? "—"} />
               <SummaryRow label="Total Amount" value={fmtAmount(summary.currency, summary.total)} mono />
               <SummaryRow label="Items" value={String(summary.itemCount)} />
               <SummaryRow label="Receipt Date" value={fmtDate(summary.transactionDate)} />
-              <SummaryRow label="Account" value={summary.account ?? "—"} />
-              <SummaryRow label="Category" value={summary.category ?? "—"} />
+              {typeSpecificRows(summary)}
             </div>
           ) : null}
         </div>
@@ -107,6 +114,66 @@ export function CaptureSuccessCard({
       </div>
     </div>
   );
+}
+
+/**
+ * Type-specific rows below the universal Total/Items/Date (Transaction UX Final Polish,
+ * Part 3) — an Expense-only "Category" row for every type was the bug this fixes. Never a
+ * separate title-generation path: this only decides which FIELDS to show, not how a
+ * title/merchant is phrased — that's activity-format.tsx's transactionTitle(), used by
+ * every other transaction display.
+ */
+function typeSpecificRows(summary: CaptureSuccessSummary) {
+  switch (summary.transactionType) {
+    case TRANSACTION_TYPES.INCOME:
+      return (
+        <>
+          <SummaryRow label="Received From" value={summary.merchant ?? "—"} />
+          {summary.destinationAccount && <SummaryRow label="Destination Account" value={summary.destinationAccount} />}
+          <SummaryRow label="Type" value="Income" />
+        </>
+      );
+    case TRANSACTION_TYPES.TRANSFER:
+      // Mirrors ReviewScreen's isInternalTransfer: only show "Destination Account" when
+      // it actually resolved to a real account. Otherwise this is an External Transfer —
+      // show the merchant field under its own type label ("External Party"), never
+      // relabeled as a resolved destination that was never actually matched.
+      return (
+        <>
+          <SummaryRow label="Type" value="Transfer" />
+          <SummaryRow label="Source Account" value={summary.account ?? "—"} />
+          {summary.destinationAccount ? (
+            <SummaryRow label="Destination Account" value={summary.destinationAccount} />
+          ) : (
+            <SummaryRow label="External Party" value={summary.merchant ?? "—"} />
+          )}
+        </>
+      );
+    case TRANSACTION_TYPES.REFUND:
+      return (
+        <>
+          <SummaryRow label="Merchant" value={summary.merchant ?? "—"} />
+          <SummaryRow label="Account" value={summary.account ?? "—"} />
+          <SummaryRow label="Type" value="Refund" />
+        </>
+      );
+    case TRANSACTION_TYPES.ADJUSTMENT:
+      return (
+        <>
+          <SummaryRow label="Reference" value={summary.merchant ?? "—"} />
+          <SummaryRow label="Type" value="Adjustment" />
+        </>
+      );
+    case TRANSACTION_TYPES.EXPENSE:
+    default:
+      return (
+        <>
+          <SummaryRow label="Merchant" value={summary.merchant ?? "—"} />
+          <SummaryRow label="Account" value={summary.account ?? "—"} />
+          <SummaryRow label="Category" value={summary.category ?? "—"} />
+        </>
+      );
+  }
 }
 
 function SummaryRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {

@@ -685,6 +685,20 @@ direction, not a passing suggestion.
 - **Payment Method field.** Removed from the Review UI (Account already
   represents the payment source); no replacement is planned unless a
   concrete, distinct need is identified.
+- **Account balance posting** (needed for a cross-currency TRANSFER's
+  destination account to eventually show a real balance — reviewed,
+  confirmed feasible, not implemented, Transaction UX Final Polish milestone).
+  A transaction header stores exactly one amount/currency pair plus the
+  `exchange_rate` used to derive `sgd_total_amount` at save time — there is
+  no separate "destination-currency amount" field, and `source_account_id`/
+  `target_account_id` are already allowed to be different-currency accounts
+  today (e.g. POSB Bank (SGD) → Cash - INR). Posting to the destination
+  account in its own currency, when that's eventually built, should derive
+  the destination-currency amount from the already-stored `sgd_total_amount`
+  via a second exchange-rate lookup (base currency → destination currency,
+  the reverse direction of `exchange.service.ts`'s existing
+  `convertToBaseCurrency`) — no schema change needed, the data already on
+  the header is sufficient.
 
 ---
 

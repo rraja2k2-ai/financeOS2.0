@@ -28,6 +28,7 @@ import {
 } from "@/repositories";
 import * as transactionService from "@/services/transaction.service";
 import { convertToBaseCurrency, ExchangeRateNotFoundError } from "@/services/finance/exchange.service";
+import { postTransactionSafely } from "@/services/finance/account-posting.service";
 import { generateReceiptId } from "@/services/transaction/receiptid.service";
 import { GENERIC_PROJECT_NAME } from "@/domain/project";
 import { DEFAULT_BASE_CURRENCY } from "@/domain/exchange-rate";
@@ -446,10 +447,18 @@ async function persistWithCompensation(supabase: SupabaseClient, payload: Payloa
       }
     });
   } catch (err) {
-    // Compensate: remove the partial write so the caller sees all-or-nothing.
-    await transactionService.deleteTransaction(supabase, header.id).catch(() => {});
+    // Compensate: remove the partial write so the caller sees all-or-nothing. Raw
+    // repository delete, NOT transactionService.deleteTransaction() — this header was
+    // never posted (posting only runs after this function fully succeeds, below), so
+    // going through the posting-aware delete would incorrectly reverse a posting that
+    // was never applied.
+    await transactionHeaderRepository.remove(supabase, header.id).catch(() => {});
     throw err;
   }
+
+  // Account Posting Engine — the RPC path posts inside transactionService.createTransaction
+  // itself; this fallback path bypasses that function entirely, so it posts here instead.
+  await postTransactionSafely(supabase, header, null);
 
   return header.id;
 }

@@ -62,6 +62,24 @@ export async function remove(supabase: SupabaseClient, id: string): Promise<void
   }
 }
 
+/**
+ * Atomically increments/decrements one or more accounts' current_balance in a single
+ * Postgres statement (migration 019's apply_account_balance_deltas RPC) — the Account
+ * Posting Engine's one write primitive. A Transfer's two legs (or an Edit's netted
+ * reversal+reapply) either both land or neither does. No-op for an empty array.
+ */
+export async function applyBalanceDeltas(supabase: SupabaseClient, deltas: { accountId: string; delta: number }[]): Promise<void> {
+  if (deltas.length === 0) return;
+
+  const { error } = await supabase.rpc("apply_account_balance_deltas", {
+    deltas: deltas.map((d) => ({ accountId: d.accountId, delta: d.delta })),
+  });
+
+  if (error) {
+    throw error;
+  }
+}
+
 /** Case-insensitive exact-name match — duplicate-name prevention (account-management.service.ts).
  *  Pass excludeId when editing an account so it doesn't collide with its own name. */
 export async function existsByName(supabase: SupabaseClient, name: string, excludeId?: string): Promise<boolean> {

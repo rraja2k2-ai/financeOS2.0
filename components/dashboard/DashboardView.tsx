@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -10,8 +10,12 @@ import type { NetCashPosition } from "@/services/finance/net-cash.service";
 import type { RecentTransaction } from "@/services/finance/activity.service";
 import { categoryIcon } from "@/constants/category-icons";
 import { TRANSACTION_TYPES } from "@/constants/transaction-types";
+import { subtitleCategory, transactionTitle } from "@/components/activity/activity-format";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
+import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
+import { useOverflowMenu } from "@/hooks/useOverflowMenu";
+import { deleteTransactionRequest, fetchReceiptPagesRequest } from "@/lib/transaction-actions";
 
 export type DashboardViewProps = {
   monthLabel: string;
@@ -23,21 +27,31 @@ export type DashboardViewProps = {
     sourceMonth: string | null;
   } | null;
   recentTransactions: RecentTransaction[];
+  /** id -> account_name (Transaction UX Final Polish) — see activity-format.tsx's transactionTitle(). */
+  accountNameById: Record<string, string>;
 };
 
 function fmt(n: number, decimals = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-export function DashboardView({ monthLabel, netCash, budget, recentTransactions: initialRecentTransactions }: DashboardViewProps) {
+export function DashboardView({ monthLabel, netCash, budget, recentTransactions: initialRecentTransactions, accountNameById }: DashboardViewProps) {
   const router = useRouter();
   const [hidden, setHidden] = useState(false);
 
   // Local copy so a saved Edit can patch just the one affected card (§4/§8 — no
   // router.refresh(), no re-querying the rest of the Dashboard's data).
   const [recentTransactions, setRecentTransactions] = useState<RecentTransaction[]>(initialRecentTransactions);
-  const [menuAnchor, setMenuAnchor] = useState<{ id: string; rect: DOMRect } | null>(null);
+  // Escape/click-outside/scroll-resize-close all live in the shared hook (Transaction UX
+  // Final Polish, Part 4) — never duplicated per screen.
+  const { anchor: menuAnchor, toggle: toggleMenu, close: closeMenu } = useOverflowMenu();
   const [actionError, setActionError] = useState<string | null>(null);
+  // View Receipt / Delete (Part 5) — same handlers/requests as Activity's own menu, via
+  // lib/transaction-actions.ts, never a second copy of the fetch logic.
+  const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+  const [viewingReceipt, setViewingReceipt] = useState<ReceiptViewerPage[] | null>(null);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
 
   // Edit/Save/Delete orchestration (fetch master data lazily, fetch the transaction, save,
   // delete) is shared via useTransactionEditor (Transaction Workspace Foundation) — the
@@ -62,25 +76,35 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
     onError: setActionError,
   });
 
-  // A floating, position-computed menu goes stale if the page scrolls or resizes under
-  // it — same fix as Activity's overflow menu (components/activity/ActivityView.tsx).
-  useEffect(() => {
-    if (!menuAnchor) return;
-    function close() {
-      setMenuAnchor(null);
+  async function handleViewReceipt(txnId: string) {
+    setActionError(null);
+    setReceiptLoadingId(txnId);
+    const result = await fetchReceiptPagesRequest(txnId);
+    if (!result.ok) {
+      setActionError(result.error);
+    } else {
+      setViewingReceipt(result.pages);
     }
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [menuAnchor]);
+    setReceiptLoadingId(null);
+  }
+
+  async function handleDelete(txnId: string) {
+    setActionError(null);
+    setDeleteBusyId(txnId);
+    const result = await deleteTransactionRequest(txnId);
+    if (!result.ok) {
+      setActionError(result.error);
+    } else {
+      setRecentTransactions((prev) => prev.filter((t) => t.id !== txnId));
+    }
+    setDeleteBusyId(null);
+    setConfirmingDeleteId(null);
+  }
 
   const pct = budget && budget.budgetedSgd > 0 ? Math.min(100, Math.round((budget.spentSgd / budget.budgetedSgd) * 100)) : null;
 
   return (
-    <div className="px-5 pt-6" onClick={() => setMenuAnchor(null)}>
+    <div className="px-5 pt-6">
       <div className="mb-5 flex items-start justify-between">
         <div>
           <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">{today()}</p>
@@ -179,6 +203,12 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
             {recentTransactions.map((t) => {
               const CategoryIcon = categoryIcon(t.primaryCategory);
               const { label: typeLabel, Icon: TypeIcon } = transactionTypeMeta(t.transactionType);
+              const title = transactionTitle({
+                transactionType: t.transactionType,
+                merchant: t.merchant,
+                sourceAccountName: t.sourceAccountId ? (accountNameById[t.sourceAccountId] ?? null) : null,
+                destinationAccountName: t.targetAccountId ? (accountNameById[t.targetAccountId] ?? null) : null,
+              });
               return (
                 <div
                   key={t.id}
@@ -196,7 +226,7 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
                     <div className="min-w-0 flex-1">
                       {/* Line 1 — merchant (strongest element) + amount, same row. */}
                       <div className="flex items-baseline justify-between gap-2">
-                        <p className="truncate text-[14.5px] font-bold leading-tight">{t.merchant || "Unknown merchant"}</p>
+                        <p className="truncate text-[14.5px] font-bold leading-tight">{title}</p>
                         <div className={cn("flex-none text-right", hidden && "blur-sm select-none")}>
                           {t.currencyGroup === "INR" ? (
                             <>
@@ -228,7 +258,7 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
                         </p>
                         <span className="inline-flex flex-none items-center gap-1 rounded-full bg-secondary/70 px-1.5 py-[1px] text-[9.5px] font-semibold text-muted-foreground">
                           <CategoryIcon size={9} />
-                          {t.primaryCategory || "Uncategorized"}
+                          {subtitleCategory(t.transactionType, t.primaryCategory) || "Uncategorized"}
                         </span>
                       </div>
 
@@ -245,7 +275,7 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
                     title="Transaction actions"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setMenuAnchor(menuAnchor?.id === t.id ? null : { id: t.id, rect: e.currentTarget.getBoundingClientRect() });
+                      toggleMenu(t.id, e.currentTarget.getBoundingClientRect());
                     }}
                     className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground"
                   >
@@ -269,7 +299,10 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
 
       {actionError && <p className="mb-4 text-[12px] font-semibold text-destructive">{actionError}</p>}
 
-      {/* Overflow menu — portal-rendered so it's never clipped by a card's own overflow-hidden. */}
+      {/* Overflow menu — portal-rendered so it's never clipped by a card's own overflow-hidden.
+          Same actions as Activity's own menu (Edit/View Receipt/Delete — Transaction UX
+          Final Polish, Part 5), reusing the exact same handlers/requests; "View in Activity"
+          is Dashboard's own additional shortcut, kept alongside them. */}
       {menuAnchor &&
         createPortal(
           <div
@@ -282,23 +315,78 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
               disabled={editLoadingId === menuAnchor.id}
               onClick={() => {
                 const id = menuAnchor.id;
-                setMenuAnchor(null);
+                closeMenu();
                 handleEdit(id);
               }}
               className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
             >
               {editLoadingId === menuAnchor.id ? "Loading…" : "Edit"}
             </button>
+            <button
+              type="button"
+              disabled={receiptLoadingId === menuAnchor.id}
+              onClick={() => {
+                const id = menuAnchor.id;
+                closeMenu();
+                handleViewReceipt(id);
+              }}
+              className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
+            >
+              {receiptLoadingId === menuAnchor.id ? "Loading…" : "View Receipt"}
+            </button>
             <Link
               href={`/activity?highlight=${menuAnchor.id}`}
-              onClick={() => setMenuAnchor(null)}
+              onClick={closeMenu}
               className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold"
             >
               View in Activity
             </Link>
+            <button
+              type="button"
+              onClick={() => {
+                const id = menuAnchor.id;
+                closeMenu();
+                setActionError(null);
+                setConfirmingDeleteId(id);
+              }}
+              className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold text-destructive"
+            >
+              Delete
+            </button>
           </div>,
           document.body
         )}
+
+      {/* View Receipt — reuses the stored original file(s), read-only (same as Activity). */}
+      {viewingReceipt && <ReceiptViewer pages={viewingReceipt} onClose={() => setViewingReceipt(null)} />}
+
+      {/* Delete confirmation — same pattern as Activity's own quick-delete. */}
+      {confirmingDeleteId && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-8" role="alertdialog" aria-label="Delete this transaction?">
+          <div className="w-full max-w-[340px] rounded-[var(--radius-lg)] border border-border bg-card p-5">
+            <p className="text-[14.5px] font-bold">Delete this transaction?</p>
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">This action cannot be undone.</p>
+            <div className="mt-4 flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setConfirmingDeleteId(null)}
+                disabled={deleteBusyId === confirmingDeleteId}
+                className="flex-1 rounded-lg border border-border py-2 text-[13px] font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDelete(confirmingDeleteId)}
+                disabled={deleteBusyId === confirmingDeleteId}
+                className="flex-1 rounded-lg bg-destructive py-2 text-[13px] font-semibold text-white disabled:opacity-50"
+              >
+                {deleteBusyId === confirmingDeleteId ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit — the SAME Review screen used by Capture and Activity, populated from the
           saved transaction. Save UPDATEs it, never creates a new one (§3/§7). Delete

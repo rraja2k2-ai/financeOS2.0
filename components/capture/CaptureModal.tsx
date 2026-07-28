@@ -599,6 +599,8 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
         transactionDate: transactionData.result.header.transactionDate,
         account: transactionData.result.headerSuggestions.account,
         category: dominantCategoryFromItems(transactionData.result.items),
+        transactionType: transactionData.result.header.transactionType,
+        destinationAccount: transactionData.result.headerSuggestions.destinationAccount,
       }
     : null;
 

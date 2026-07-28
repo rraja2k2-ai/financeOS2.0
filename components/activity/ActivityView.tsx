@@ -15,6 +15,9 @@ import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/Rec
 import { TransactionCard } from "@/components/activity/TransactionCard";
 import { fmt, formatQty, highlight } from "@/components/activity/activity-format";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
+import { useOverflowMenu } from "@/hooks/useOverflowMenu";
+import { isExpenseTransaction } from "@/lib/expense-filter";
+import { deleteTransactionRequest, fetchReceiptPagesRequest } from "@/lib/transaction-actions";
 import type { CaptureMasterData } from "@/services/ai/ai-provider";
 
 export type ActivityViewProps = {
@@ -46,6 +49,10 @@ export type ActivityViewProps = {
   /** From ?subcategory=<secondary> — only meaningful alongside categoryFilter; narrows
    *  further to items matching both primary and secondary category. */
   subcategoryFilter?: string;
+  /** id -> account_name, loaded once server-side (Transaction UX Final Polish) — powers
+   *  the type-aware transaction title ("POSB Bank → MariBank" for an internal transfer),
+   *  see activity-format.tsx's transactionTitle(). */
+  accountNameById: Record<string, string>;
 };
 
 /** Only used by the search-results view below (the main list's cards use TransactionCard, which doesn't need it). */
@@ -66,6 +73,7 @@ export function ActivityView({
   initialCustomEnd,
   categoryFilter,
   subcategoryFilter,
+  accountNameById,
 }: ActivityViewProps) {
   const router = useRouter();
   const highlightedTxn = highlightId ? transactions.find((t) => t.id === highlightId) : undefined;
@@ -123,24 +131,11 @@ export function ActivityView({
   // Header overflow menu (UX refresh Phase C) + Receipt Viewer (Phase D). The menu
   // renders through a portal (Fix 5.3) so it's never clipped by the transaction card's
   // overflow-hidden — position is computed from the trigger button's own rect, not CSS.
-  const [menuAnchor, setMenuAnchor] = useState<{ id: string; rect: DOMRect } | null>(null);
+  // Escape/click-outside/scroll-resize-close all live in the shared hook now (Transaction
+  // UX Final Polish, Part 4) — never duplicated per screen.
+  const { anchor: menuAnchor, toggle: toggleMenu, close: closeMenu } = useOverflowMenu();
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
   const [viewingReceipt, setViewingReceipt] = useState<ReceiptViewerPage[] | null>(null);
-
-  // A floating, position-computed menu goes stale if the page scrolls or resizes under
-  // it — simplest correct behavior is to just close it rather than re-track position.
-  useEffect(() => {
-    if (!menuAnchor) return;
-    function close() {
-      setMenuAnchor(null);
-    }
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [menuAnchor]);
 
   // Re-runs when highlightId itself changes, not on every render — required for the
   // post-capture flow, where a background capture can navigate here (?highlight=<id>)
@@ -211,45 +206,29 @@ export function ActivityView({
   async function handleDelete(txnId: string) {
     setActionError(null);
     setDeleteBusyId(txnId);
-    try {
-      const res = await fetch(`/api/transactions/${txnId}`, { method: "DELETE" });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        setActionError(body?.error ?? "Couldn't delete this transaction. Try again.");
-        return;
-      }
+    const result = await deleteTransactionRequest(txnId);
+    if (!result.ok) {
+      setActionError(result.error);
+    } else {
       setToast("Transaction deleted.");
       if (expanded === txnId) setExpanded(null);
       router.refresh();
-    } catch {
-      setActionError("Couldn't reach the server. Try again.");
-    } finally {
-      setDeleteBusyId(null);
-      setConfirmingDeleteId(null);
     }
+    setDeleteBusyId(null);
+    setConfirmingDeleteId(null);
   }
 
   /** Loads signed URLs for the transaction's stored receipt pages and opens the full-screen viewer. */
   async function handleViewReceipt(txnId: string) {
     setActionError(null);
     setReceiptLoadingId(txnId);
-    try {
-      const res = await fetch(`/api/transactions/${txnId}/receipt`);
-      const body = (await res.json().catch(() => null)) as { pages?: ReceiptViewerPage[]; error?: string } | null;
-      if (!res.ok || !body?.pages) {
-        setActionError(body?.error ?? "Couldn't load the receipt. Try again.");
-        return;
-      }
-      if (body.pages.length === 0) {
-        setActionError("No receipt was attached to this transaction.");
-        return;
-      }
-      setViewingReceipt(body.pages);
-    } catch {
-      setActionError("Couldn't reach the server. Try again.");
-    } finally {
-      setReceiptLoadingId(null);
+    const result = await fetchReceiptPagesRequest(txnId);
+    if (!result.ok) {
+      setActionError(result.error);
+    } else {
+      setViewingReceipt(result.pages);
     }
+    setReceiptLoadingId(null);
   }
 
   /**
@@ -286,9 +265,16 @@ export function ActivityView({
   const sgdGroupTxns = inPeriod.filter((t) => t.currencyGroup === "SGD");
   const inrGroupTxns = inPeriod.filter((t) => t.currencyGroup === "INR");
 
-  const sgdTotal = sgdGroupTxns.reduce((sum, t) => sum + t.sgdAmount, 0);
-  const inrNativeTotal = inrGroupTxns.reduce((sum, t) => sum + t.originalAmount, 0);
-  const inrSgdTotal = inrGroupTxns.reduce((sum, t) => sum + t.sgdAmount, 0);
+  // "SGD/INR Spend" is expense analytics, not a transaction count — TRANSFER (and any
+  // other non-expense type) moves money between accounts/liabilities, it isn't spend.
+  // The transaction LIST below still shows every type (sgdGroupTxns/inrGroupTxns stay
+  // unfiltered for that); only these three totals exclude non-expense rows, reusing the
+  // exact same classifier category-spend.service.ts/Dashboard/Budget already use — see
+  // lib/expense-filter.ts (Transaction UX Final Polish, Part 1).
+  const isExpenseHeader = (t: ActivityTransaction) => isExpenseTransaction({ transaction_type: t.transactionType, primary_category: t.primaryCategory });
+  const sgdTotal = sgdGroupTxns.filter(isExpenseHeader).reduce((sum, t) => sum + t.sgdAmount, 0);
+  const inrNativeTotal = inrGroupTxns.filter(isExpenseHeader).reduce((sum, t) => sum + t.originalAmount, 0);
+  const inrSgdTotal = inrGroupTxns.filter(isExpenseHeader).reduce((sum, t) => sum + t.sgdAmount, 0);
 
   const groupTxns = group === "SGD" ? sgdGroupTxns : inrGroupTxns;
   const q = query.trim().toLowerCase();
@@ -351,7 +337,7 @@ export function ActivityView({
         ];
 
   return (
-    <div className="px-5 pt-6" onClick={() => setMenuAnchor(null)}>
+    <div className="px-5 pt-6">
       <h1 className="mb-4 text-[22px] font-bold tracking-tight">Activity</h1>
 
       {accountId && (
@@ -510,7 +496,8 @@ export function ActivityView({
                 onToggle={() => setExpanded(expanded === t.id ? null : t.id)}
                 isHighlighted={t.id === highlightId && highlightActive}
                 showActions
-                onActionsClick={(rect) => setMenuAnchor(menuAnchor?.id === t.id ? null : { id: t.id, rect })}
+                onActionsClick={(rect) => toggleMenu(t.id, rect)}
+                accountNameById={accountNameById}
                 showAllItems={expandedItemsFor.has(t.id)}
                 onShowAllItems={() => setExpandedItemsFor((prev) => new Set(prev).add(t.id))}
               />
@@ -536,7 +523,7 @@ export function ActivityView({
               disabled={editLoadingId === menuAnchor.id}
               onClick={() => {
                 const id = menuAnchor.id;
-                setMenuAnchor(null);
+                closeMenu();
                 handleEdit(id);
               }}
               className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
@@ -548,7 +535,7 @@ export function ActivityView({
               disabled={receiptLoadingId === menuAnchor.id}
               onClick={() => {
                 const id = menuAnchor.id;
-                setMenuAnchor(null);
+                closeMenu();
                 handleViewReceipt(id);
               }}
               className="block w-full border-t border-border px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
@@ -559,7 +546,7 @@ export function ActivityView({
               type="button"
               onClick={() => {
                 const id = menuAnchor.id;
-                setMenuAnchor(null);
+                closeMenu();
                 setActionError(null);
                 setConfirmingDeleteId(id);
               }}

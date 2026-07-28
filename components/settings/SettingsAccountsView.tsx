@@ -6,6 +6,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import type { Account } from "@/domain/account";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
+import { useOverflowMenu } from "@/hooks/useOverflowMenu";
 import { ACCOUNT_TYPES, accountTypeLabel } from "@/constants/accounts";
 import { ALL_CURRENCIES } from "@/domain/exchange-rate";
 import {
@@ -30,7 +31,7 @@ export function SettingsAccountsView({ accounts: initialAccounts }: { accounts: 
   const [formError, setFormError] = useState<string | null>(null);
   const [formPending, startFormTransition] = useTransition();
   const [toast, setToast] = useState<string | null>(null);
-  const [menuAnchor, setMenuAnchor] = useState<{ id: string; rect: DOMRect } | null>(null);
+  const { anchor: menuAnchor, toggle: toggleMenu, close: closeMenu } = useOverflowMenu();
   const [archiveBusyId, setArchiveBusyId] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -41,21 +42,6 @@ export function SettingsAccountsView({ accounts: initialAccounts }: { accounts: 
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
-
-  // A floating, position-computed menu goes stale if the page scrolls or resizes under
-  // it — same fix as Activity's overflow menu (components/activity/ActivityView.tsx).
-  useEffect(() => {
-    if (!menuAnchor) return;
-    function close() {
-      setMenuAnchor(null);
-    }
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [menuAnchor]);
 
   const visibleAccounts = accounts.filter((a) => showArchived || a.status !== "Inactive");
   const archivedCount = accounts.filter((a) => a.status === "Inactive").length;
@@ -90,7 +76,7 @@ export function SettingsAccountsView({ accounts: initialAccounts }: { accounts: 
   }
 
   function handleArchiveToggle(account: Account) {
-    setMenuAnchor(null);
+    closeMenu();
     const archiving = account.status !== "Inactive";
     setArchiveBusyId(account.id);
     startFormTransition(async () => {
@@ -124,7 +110,7 @@ export function SettingsAccountsView({ accounts: initialAccounts }: { accounts: 
   }
 
   return (
-    <div className="px-5 pt-6 pb-8" onClick={() => setMenuAnchor(null)}>
+    <div className="px-5 pt-6 pb-8">
       <SettingsPageHeader
         title="Accounts"
         action={
@@ -186,7 +172,7 @@ export function SettingsAccountsView({ accounts: initialAccounts }: { accounts: 
                   title="Account actions"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setMenuAnchor(menuAnchor?.id === account.id ? null : { id: account.id, rect: e.currentTarget.getBoundingClientRect() });
+                    toggleMenu(account.id, e.currentTarget.getBoundingClientRect());
                   }}
                   className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground"
                 >
@@ -221,7 +207,7 @@ export function SettingsAccountsView({ accounts: initialAccounts }: { accounts: 
             <button
               type="button"
               onClick={() => {
-                setMenuAnchor(null);
+                closeMenu();
                 setFormError(null);
                 setDialog({ mode: "edit", account: menuAccount });
               }}
@@ -241,7 +227,7 @@ export function SettingsAccountsView({ accounts: initialAccounts }: { accounts: 
               type="button"
               onClick={() => {
                 const id = menuAccount.id;
-                setMenuAnchor(null);
+                closeMenu();
                 setDeleteError(null);
                 setConfirmingDeleteId(id);
               }}

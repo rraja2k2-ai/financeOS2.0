@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import { currencyPrefix } from "@/lib/currency";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
-import { fmt, formatCapturedAt, formatFullDate, formatQty, highlight } from "./activity-format";
+import { fmt, formatCapturedAt, formatFullDate, formatQty, highlight, subtitleCategory, transactionTitle } from "./activity-format";
 import { categoryIcon } from "@/constants/category-icons";
 
 /**
@@ -44,6 +44,9 @@ export type TransactionCardProps = {
   /** Long-receipt "show all items" state for this one card — irrelevant while collapsed. */
   showAllItems?: boolean;
   onShowAllItems?: () => void;
+  /** id -> account_name, for the type-aware title (an internal Transfer needs the
+   *  destination account's NAME) — see activity-format.tsx's transactionTitle(). */
+  accountNameById: Record<string, string>;
 };
 
 export function TransactionCard({
@@ -56,8 +59,15 @@ export function TransactionCard({
   onActionsClick,
   showAllItems = false,
   onShowAllItems,
+  accountNameById,
 }: TransactionCardProps) {
   const Icon = categoryIcon(t.primaryCategory);
+  const title = transactionTitle({
+    transactionType: t.transactionType,
+    merchant: t.merchant,
+    sourceAccountName: t.sourceAccountId ? (accountNameById[t.sourceAccountId] ?? null) : null,
+    destinationAccountName: t.targetAccountId ? (accountNameById[t.targetAccountId] ?? null) : null,
+  });
   const isLongReceipt = t.items.length > LONG_RECEIPT_THRESHOLD;
   const visibleItems = isLongReceipt && !showAllItems ? t.items.slice(0, DEFAULT_VISIBLE_ITEMS) : t.items;
   const hiddenCount = t.items.length - visibleItems.length;
@@ -87,9 +97,9 @@ export function TransactionCard({
             <Icon size={18} strokeWidth={2} />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[19px] font-bold leading-tight">{highlight(t.merchant, query)}</p>
+            <p className="truncate text-[14.5px] font-bold leading-tight">{highlight(title, query)}</p>
             <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-              {t.primaryCategory} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
+              {subtitleCategory(t.transactionType, t.primaryCategory)} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
             </p>
           </div>
           <div className="flex-none text-right">
