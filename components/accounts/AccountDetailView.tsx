@@ -155,6 +155,7 @@ export function AccountDetailView({ account, summary, recentTransactions, period
                 showActions
                 onActionsClick={(rect) => toggleMenu(t.id, rect)}
                 accountNameById={accountNameById}
+                accountCurrency={account.currency}
               />
             ))}
             <Link href={activityHref()} className="mt-1 block text-center text-[12.5px] font-semibold text-primary">

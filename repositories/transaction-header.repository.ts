@@ -62,10 +62,16 @@ export async function listByDateRange(
 }
 
 /**
- * Headers sourced from one account (transaction_headers.source_account_id), optionally
- * bounded by transaction_date and/or capped to the newest N — for the Account Detail
- * page's period summary (no limit) and Recent Transactions preview (limit: 5), so the
- * preview never pulls more rows than it displays.
+ * Headers that affect one account's balance — either as source_account_id (Expense,
+ * Transfer/Withdrawal out, Adjustment) or as target_account_id (Income, Transfer/Deposit
+ * in) — the same two columns the Account Posting Engine posts against (see
+ * account-posting.service.ts), so a transaction is visible from an account's history
+ * exactly when it moved that account's balance. Bug Fix (Account Transaction History):
+ * this previously filtered source_account_id only, so an internal Transfer (e.g. "POSB
+ * Bank -> MariBank") never appeared in the destination account's own history even though
+ * its balance was posted. Optionally bounded by transaction_date and/or capped to the
+ * newest N — for the Account Detail page's period summary (no limit) and Recent
+ * Transactions preview (limit: 5), so the preview never pulls more rows than it displays.
  */
 export async function listByAccountId(
   supabase: SupabaseClient,
@@ -75,7 +81,7 @@ export async function listByAccountId(
   let query = supabase
     .from("transaction_headers")
     .select("*")
-    .eq("source_account_id", accountId)
+    .or(`source_account_id.eq.${accountId},target_account_id.eq.${accountId}`)
     .order("transaction_date", { ascending: false })
     .order("created_at", { ascending: false });
 

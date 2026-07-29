@@ -36,7 +36,7 @@ export default async function AccountDetailPage({
 
   const [summary, recentTransactions, allAccounts] = await Promise.all([
     getAccountPeriodSummary(supabase, id, start, end),
-    getRecentTransactionsForAccount(supabase, id, start, end, RECENT_LIMIT),
+    getRecentTransactionsForAccount(supabase, id, account.currency, start, end, RECENT_LIMIT),
     accountRepository.list(supabase),
   ]);
 
