@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { FolderKanban, Wallet, X } from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { FolderKanban, Receipt, Wallet, X } from "lucide-react";
 import { cn, withCurrent } from "@/lib/utils";
 import { currencyPrefix } from "@/lib/currency";
 import { formatCapturedAt } from "@/components/activity/activity-format";
@@ -11,6 +11,8 @@ import { merchantRequiredFor, type ReviewedCapture } from "@/services/capture/sa
 import { reviewedFromResult } from "@/services/capture/reviewed-from-result";
 import { TransactionItemRow, qtyIsNegative, type ItemDraft } from "@/components/capture/TransactionItemRow";
 import { ALL_TRANSACTION_TYPES, MERCHANT_FIELD_LABELS, TRANSACTION_TYPE_LABELS, TRANSACTION_TYPES, type TransactionType } from "@/constants/transaction-types";
+import { fetchReceiptPagesRequest } from "@/lib/transaction-actions";
+import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
 
 /**
  * FinanceOS Review Screen (C3) — replaces the temporary Developer Viewer.
@@ -65,6 +67,7 @@ export function ReviewScreen({
   result,
   masterData,
   capturedAt,
+  headerId,
   onCancel,
   onSave,
   onDelete,
@@ -73,6 +76,12 @@ export function ReviewScreen({
   masterData: CaptureMasterData;
   /** Ingestion timestamp, read-only display only — never editable (CLAUDE.md §7). */
   capturedAt?: string;
+  /** Transaction Workspace Final UX Polish — the already-saved transaction's id, when
+   *  known (every entry point that opens this screen already has one, since Review only
+   *  ever opens after the transaction exists — CLAUDE.md §7). Powers the header's own
+   *  receipt button below; omit only if a future caller genuinely has no saved
+   *  transaction yet, in which case the button simply doesn't render. */
+  headerId?: string;
   onCancel: () => void;
   /** Persist the reviewed data. Resolves on success (parent closes this screen), rejects with a friendly message on failure (this screen stays open). */
   onSave: (reviewed: ReviewedCapture) => Promise<void>;
@@ -84,6 +93,11 @@ export function ReviewScreen({
   const [itemDrafts, setItemDrafts] = useState<ItemDraft[]>(items);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** Accessibility (Transaction Workspace Final UX Polish) — one stable base id, suffixed
+   *  per metadata pill below, so each `<select>` gets a real `aria-labelledby` pointing at
+   *  its own visible label instead of a screen reader announcing just the raw value with
+   *  no field context. */
+  const metaId = useId();
   /** Progressive disclosure (UI Phase — Premium AI Review Line Items): a single index, so
    *  expanding one card always collapses whichever was open — never a per-item flag. Purely
    *  presentational; itemDrafts (the actual edited values) is unaffected by collapsing. */
@@ -95,6 +109,27 @@ export function ReviewScreen({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Receipt Access from Review Screen (Transaction Workspace Final UX Polish) — opens the
+  // SAME ReceiptViewer/fetch used by Activity/Dashboard's "View Receipt" menu item, as an
+  // overlay on top of this screen (never unmounting it), so closing the viewer returns
+  // the user to exactly the edit state they left, no second receipt-viewing experience.
+  const [viewingReceipt, setViewingReceipt] = useState<ReceiptViewerPage[] | null>(null);
+  const [receiptLoading, setReceiptLoading] = useState(false);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+
+  async function handleViewReceipt() {
+    if (!headerId) return;
+    setReceiptError(null);
+    setReceiptLoading(true);
+    const result = await fetchReceiptPagesRequest(headerId);
+    if (result.ok) {
+      setViewingReceipt(result.pages);
+    } else {
+      setReceiptError(result.error);
+    }
+    setReceiptLoading(false);
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -230,15 +265,35 @@ export function ReviewScreen({
                 />
               )}
             </div>
-            <button
-              type="button"
-              onClick={onCancel}
-              aria-label="Cancel review"
-              className="flex h-9 w-9 flex-none items-center justify-center rounded-xl border border-border bg-card text-muted-foreground"
-            >
-              <X size={16} strokeWidth={2.3} />
-            </button>
+            <div className="flex flex-none items-center gap-2">
+              {headerId && (
+                <button
+                  type="button"
+                  onClick={handleViewReceipt}
+                  disabled={receiptLoading}
+                  aria-label="View receipt"
+                  title="View receipt"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground disabled:opacity-50"
+                >
+                  <Receipt size={16} strokeWidth={2.3} />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onCancel}
+                aria-label="Cancel review"
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground"
+              >
+                <X size={16} strokeWidth={2.3} />
+              </button>
+            </div>
           </div>
+
+          {receiptError && (
+            <p className="-mt-2 mb-3 text-[12px] font-semibold text-destructive" role="alert">
+              {receiptError}
+            </p>
+          )}
 
           {/* Transaction Total — second-strongest element after Merchant (consistency with
               Activity's header hierarchy); previously 34px, larger than Merchant's 21px,
@@ -270,65 +325,99 @@ export function ReviewScreen({
             )}
           </div>
 
-          {/* Compact metadata row — secondary fields, out of the way of the primary summary. */}
-          <div className="-mx-5 flex items-center gap-2 overflow-x-auto px-5 pb-4">
-            <MetaPill label="Type">
-              <select
-                value={headerDraft.transactionType}
-                onChange={(e) => setTransactionType(e.target.value as TransactionType)}
-                className={metaSelectClass}
-              >
-                {ALL_TRANSACTION_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {TRANSACTION_TYPE_LABELS[t]}
-                  </option>
-                ))}
-              </select>
-            </MetaPill>
-            <MetaPill label="Currency">
-              <select value={headerDraft.currency} onChange={(e) => setHeader("currency", e.target.value)} className={metaSelectClass}>
-                <option value="">—</option>
-                {withCurrent(CURRENCIES, headerDraft.currency).map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </MetaPill>
-            <MetaPill label="Account" icon={<Wallet size={12} strokeWidth={2.3} />}>
-              <select value={headerDraft.account} onChange={(e) => setHeader("account", e.target.value)} className={metaSelectClass}>
-                <option value="">—</option>
-                {withCurrent(masterData.accounts.map((a) => a.name), headerDraft.account).map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </MetaPill>
-            {/* Transaction Type Intelligence Part 2 — destination account only applies to
-                TRANSFER/INCOME; reuses the exact same account-select markup as Account. */}
-            {(headerDraft.transactionType === "TRANSFER" || headerDraft.transactionType === "INCOME") && (
-              <MetaPill label="Destination" icon={<Wallet size={12} strokeWidth={2.3} />}>
-                <select value={headerDraft.destinationAccount} onChange={(e) => setHeader("destinationAccount", e.target.value)} className={metaSelectClass}>
+          {/* Compact metadata row — secondary fields, out of the way of the primary summary.
+              Wrapped in a relative container so the edge-fade below can hint at
+              off-screen chips (Metadata Chip Overflow Indicator) without any JS scroll
+              measurement — a static gradient, not a computed one. */}
+          <div className="relative -mx-5">
+            <div className="flex items-center gap-2 overflow-x-auto px-5 pb-4">
+              <MetaPill label="Type" labelId={`${metaId}-type`}>
+                <select
+                  value={headerDraft.transactionType}
+                  onChange={(e) => setTransactionType(e.target.value as TransactionType)}
+                  aria-labelledby={`${metaId}-type`}
+                  className={metaSelectClass}
+                >
+                  {ALL_TRANSACTION_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {TRANSACTION_TYPE_LABELS[t]}
+                    </option>
+                  ))}
+                </select>
+              </MetaPill>
+              <MetaPill label="Currency" labelId={`${metaId}-currency`}>
+                <select
+                  value={headerDraft.currency}
+                  onChange={(e) => setHeader("currency", e.target.value)}
+                  aria-labelledby={`${metaId}-currency`}
+                  className={metaSelectClass}
+                >
                   <option value="">—</option>
-                  {withCurrent(masterData.accounts.map((a) => a.name), headerDraft.destinationAccount).map((name) => (
+                  {withCurrent(CURRENCIES, headerDraft.currency).map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </MetaPill>
+              <MetaPill label="Account" labelId={`${metaId}-account`} icon={<Wallet size={12} strokeWidth={2.3} />}>
+                <select
+                  value={headerDraft.account}
+                  onChange={(e) => setHeader("account", e.target.value)}
+                  aria-labelledby={`${metaId}-account`}
+                  className={metaSelectClass}
+                >
+                  <option value="">—</option>
+                  {withCurrent(masterData.accounts.map((a) => a.name), headerDraft.account).map((name) => (
                     <option key={name} value={name}>
                       {name}
                     </option>
                   ))}
                 </select>
               </MetaPill>
-            )}
-            <MetaPill label="Project" icon={<FolderKanban size={12} strokeWidth={2.3} />}>
-              <select value={headerDraft.project} onChange={(e) => setHeader("project", e.target.value)} className={metaSelectClass}>
-                <option value="">—</option>
-                {withCurrent(masterData.projects.map((p) => p.name), headerDraft.project).map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </MetaPill>
+              {/* Transaction Type Intelligence Part 2 — destination account only applies to
+                  TRANSFER/INCOME; reuses the exact same account-select markup as Account. */}
+              {(headerDraft.transactionType === "TRANSFER" || headerDraft.transactionType === "INCOME") && (
+                <MetaPill label="Destination" labelId={`${metaId}-destination`} icon={<Wallet size={12} strokeWidth={2.3} />}>
+                  <select
+                    value={headerDraft.destinationAccount}
+                    onChange={(e) => setHeader("destinationAccount", e.target.value)}
+                    aria-labelledby={`${metaId}-destination`}
+                    className={metaSelectClass}
+                  >
+                    <option value="">—</option>
+                    {withCurrent(masterData.accounts.map((a) => a.name), headerDraft.destinationAccount).map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </MetaPill>
+              )}
+              <MetaPill label="Project" labelId={`${metaId}-project`} icon={<FolderKanban size={12} strokeWidth={2.3} />}>
+                <select
+                  value={headerDraft.project}
+                  onChange={(e) => setHeader("project", e.target.value)}
+                  aria-labelledby={`${metaId}-project`}
+                  className={metaSelectClass}
+                >
+                  <option value="">—</option>
+                  {withCurrent(masterData.projects.map((p) => p.name), headerDraft.project).map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </MetaPill>
+            </div>
+            {/* Metadata Chip Overflow Indicator — a static edge-fade, not a computed one:
+                no scroll-position JS, no listener, so it costs nothing at render or scroll
+                time. Hints that more chips may sit off-screen (e.g. Project on a Transfer's
+                5-chip row) without measuring anything. */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute bottom-4 right-0 top-0 w-8 bg-gradient-to-l from-background to-transparent"
+            />
           </div>
         </header>
 
@@ -456,6 +545,10 @@ export function ReviewScreen({
           </div>
         </div>
       )}
+
+      {/* Receipt Access from Review Screen — overlays on top (z-[65] > this screen's
+          z-[60]); closing just clears local state, leaving every draft edit untouched. */}
+      {viewingReceipt && <ReceiptViewer pages={viewingReceipt} onClose={() => setViewingReceipt(null)} />}
     </div>
   );
 }
@@ -463,11 +556,25 @@ export function ReviewScreen({
 const metaSelectClass = "bg-transparent text-[12.5px] font-semibold outline-none focus:text-primary";
 
 /** A compact, chip-styled field for the header's secondary metadata row. */
-function MetaPill({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
+function MetaPill({
+  label,
+  labelId,
+  icon,
+  children,
+}: {
+  label: string;
+  /** Accessibility — matched by the child `<select>`'s own `aria-labelledby` so a screen
+   *  reader announces "Account: Fresh Mart", not just "Fresh Mart". */
+  labelId: string;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-none items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5">
       {icon && <span className="text-muted-foreground">{icon}</span>}
-      <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span id={labelId} className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
       {children}
     </div>
   );

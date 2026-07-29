@@ -72,7 +72,14 @@ export function TransactionItemRow({
             {amountNum !== null ? fmt(amountNum) : "—"}
           </span>
         </div>
-        {line2 && <p className="truncate text-[11.5px] text-muted-foreground">{line2}</p>}
+        {line2 && (
+          <p
+            className={cn("truncate text-[11.5px] text-muted-foreground", qtyIsNegative(item.qty) && "font-semibold text-destructive")}
+            role={qtyIsNegative(item.qty) ? "alert" : undefined}
+          >
+            {line2}
+          </p>
+        )}
       </button>
 
       {/* Expanded — the exact same editable controls as before; only a light background

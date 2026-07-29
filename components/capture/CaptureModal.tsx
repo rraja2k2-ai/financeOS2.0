@@ -613,6 +613,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
         result={transactionData.result}
         masterData={masterData}
         capturedAt={transactionData.capturedAt}
+        headerId={savedHeaderId ?? undefined}
         onCancel={() => setReviewing(false)}
         onSave={handleReviewSave}
         onDelete={handleReviewDelete}

@@ -396,6 +396,7 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
           result={editing.result}
           masterData={masterData}
           capturedAt={editing.capturedAt}
+          headerId={editing.headerId}
           onCancel={closeEditor}
           onSave={saveEditor}
           onDelete={deleteEditor}
