@@ -56,6 +56,25 @@ export type TransactionTitleInput = {
   destinationAccountName: string | null;
 };
 
+/** Bug Fix (Transfer Title Truncation) — the title is one CSS `truncate` span shared
+ *  with an icon and an amount column, so a long "Source → Destination" string got cut
+ *  off mid-destination-name, e.g. "POSB Bank → ICICI B...". Two-step shortening applied
+ *  to each account name individually before the title is assembled, so the arrow and
+ *  both sides stay legible instead of one long name silently eating the other's space:
+ *  (1) drop a redundant trailing "Bank" qualifier ("POSB Bank" -> "POSB", "MariBank" and
+ *  "Citi Card" are untouched since neither ends in a separate "Bank" word), (2) cap
+ *  whatever remains at TRANSFER_NAME_MAX_LENGTH with its own single-character ellipsis.
+ *  Display-only — never touches the stored account_name (Settings, dropdowns, etc. keep
+ *  showing the full name). The title's own `truncate` class in TransactionCard stays as
+ *  a last-resort safety net; with this shortening it practically never has to trigger. */
+const TRANSFER_NAME_MAX_LENGTH = 14;
+
+function shortenAccountNameForTransferTitle(name: string): string {
+  const withoutGenericSuffix = name.replace(/\s+Bank$/i, "").trim() || name;
+  if (withoutGenericSuffix.length <= TRANSFER_NAME_MAX_LENGTH) return withoutGenericSuffix;
+  return `${withoutGenericSuffix.slice(0, TRANSFER_NAME_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
 /**
  * The ONE place a transaction's display title is generated — used by TransactionCard
  * (Activity + Account Detail's Recent Transactions), Dashboard's own Recent Transactions
@@ -72,14 +91,17 @@ export function transactionTitle(t: TransactionTitleInput): string {
       return merchant ?? "Merchant";
     case TRANSACTION_TYPES.INCOME:
       return merchant ?? "Income";
-    case TRANSACTION_TYPES.TRANSFER:
+    case TRANSACTION_TYPES.TRANSFER: {
       // Internal (destination resolves to one of the user's own accounts): "Source →
       // Destination". External (no destination account — merchant holds the external
       // party's name instead, see save-capture.service.ts's resolveMerchantForSave()).
       if (t.destinationAccountName) {
-        return `${t.sourceAccountName ?? "Unknown Account"} → ${t.destinationAccountName}`;
+        const source = t.sourceAccountName ? shortenAccountNameForTransferTitle(t.sourceAccountName) : "Unknown Account";
+        const destination = shortenAccountNameForTransferTitle(t.destinationAccountName);
+        return `${source} → ${destination}`;
       }
       return merchant ?? "External Transfer";
+    }
     case TRANSACTION_TYPES.ADJUSTMENT:
       return merchant ?? "Adjustment";
     default:
