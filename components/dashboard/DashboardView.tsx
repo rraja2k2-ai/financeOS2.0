@@ -10,7 +10,7 @@ import type { NetCashPosition } from "@/services/finance/net-cash.service";
 import type { RecentTransaction } from "@/services/finance/activity.service";
 import { categoryIcon } from "@/constants/category-icons";
 import { TRANSACTION_TYPES } from "@/constants/transaction-types";
-import { subtitleCategory, transactionTitle } from "@/components/activity/activity-format";
+import { sourceAccountSubline, subtitleCategory, transactionTitle } from "@/components/activity/activity-format";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
@@ -203,12 +203,14 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
             {recentTransactions.map((t) => {
               const CategoryIcon = categoryIcon(t.primaryCategory);
               const { label: typeLabel, Icon: TypeIcon } = transactionTypeMeta(t.transactionType);
-              const title = transactionTitle({
+              const titleInput = {
                 transactionType: t.transactionType,
                 merchant: t.merchant,
                 sourceAccountName: t.sourceAccountId ? (accountNameById[t.sourceAccountId] ?? null) : null,
                 destinationAccountName: t.targetAccountId ? (accountNameById[t.targetAccountId] ?? null) : null,
-              });
+              };
+              const title = transactionTitle(titleInput);
+              const sourceAccount = sourceAccountSubline(titleInput);
               return (
                 <div
                   key={t.id}
@@ -241,6 +243,10 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
                               <div className="font-mono text-[9.5px] text-muted-foreground tabular-nums">{t.currency} {fmt(t.originalAmount)}</div>
                             </>
                           )}
+                          {/* Source Account Visibility — same rule as Activity's
+                              TransactionCard: hidden for an internal Transfer since the
+                              title already reads "Source → Destination". */}
+                          {sourceAccount && <div className="mt-0.5 truncate text-[9.5px] text-muted-foreground">{sourceAccount}</div>}
                         </div>
                       </div>
 

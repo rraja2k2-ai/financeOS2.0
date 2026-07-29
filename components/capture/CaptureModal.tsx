@@ -588,6 +588,37 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     onClose();
   }
 
+  /** Continue Capturing (Capture Complete Workflow) — resets everything about THIS
+   *  finished capture (receipt pages, context, success/processing state) so the modal is
+   *  immediately ready for the next receipt, without closing/reopening it — the whole
+   *  point for a batch capture session. masterData is deliberately NOT reset: it's
+   *  already loaded once this session and reused for every capture in it (CLAUDE.md §5
+   *  "load once, reuse many times"), so Continue Capturing never re-fetches it even if
+   *  the user opens Review again on the next receipt. */
+  function handleContinueCapturing() {
+    releasePages(receipt?.pages ?? []);
+    releasePages(pendingReceipt?.pages ?? []);
+    setReceipt(null);
+    setPendingReceipt(null);
+    setContext("");
+    setNotice(null);
+    setSubmitting(false);
+    setSubmitError(null);
+    setQueueId(null);
+    setProcessingError(null);
+    setActionBusy(false);
+    setHadFiles(false);
+    setUploadDone(false);
+    setQueuedAt(null);
+    setSucceeded(false);
+    setSavedHeaderId(null);
+    setTransactionData(null);
+    setSummaryLoading(false);
+    setSummaryError(null);
+    setReviewing(false);
+    setReviewError(null);
+  }
+
   const completedSteps = !uploadDone ? 0 : !queuedAt ? 1 : 1 + Math.min(3, Math.floor((Date.now() - queuedAt) / SIMULATED_STAGE_MS));
 
   const cardSummary: CaptureSuccessSummary | null = transactionData
@@ -660,6 +691,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
               onRetry={handleRetrySummary}
               onReview={handleReviewTransaction}
               reviewBusy={masterDataLoading || summaryLoading || !transactionData}
+              onContinue={handleContinueCapturing}
               onDone={handleDone}
             />
             {reviewError && <p className="mt-1 text-center text-[12px] font-semibold text-destructive">{reviewError}</p>}

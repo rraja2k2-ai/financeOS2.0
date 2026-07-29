@@ -91,6 +91,13 @@ export function ReviewScreen({
   const [{ header, items }] = useState(() => draftsFromResult(result));
   const [headerDraft, setHeaderDraft] = useState<HeaderDraft>(header);
   const [itemDrafts, setItemDrafts] = useState<ItemDraft[]>(items);
+  // Editable Tax and Discount (Transaction Workspace Final UX Polish) — form-friendly
+  // strings, same convention as item amount/unitPrice; empty means "not specified" (saves
+  // as null, matching the AI's own null when it found neither), typing "0" is a distinct,
+  // deliberate zero. Persists through the exact same `tax`/`discount` ReviewedCapture
+  // fields the AI result already used — no new field, no schema change.
+  const [taxDraft, setTaxDraft] = useState(result.header.tax != null ? String(result.header.tax) : "");
+  const [discountDraft, setDiscountDraft] = useState(result.header.discount != null ? String(result.header.discount) : "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   /** Accessibility (Transaction Workspace Final UX Polish) — one stable base id, suffixed
@@ -173,6 +180,19 @@ export function ReviewScreen({
     setItemDrafts((list) => list.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   }
 
+  /** Individual Line Item Deletion (Transaction Workspace Final UX Polish) — removes only
+   *  the selected item; subtotal/grandTotal below are already derived from itemDrafts, so
+   *  totals update on this same render, no extra state or refetch. expandedItem is a plain
+   *  array index, so removing an earlier item shifts every later index down by one —
+   *  adjusted here rather than left to silently point at the wrong row. */
+  function removeItem(index: number) {
+    setItemDrafts((list) => list.filter((_, i) => i !== index));
+    setExpandedItem((current) => {
+      if (current === null || current === index) return null;
+      return current > index ? current - 1 : current;
+    });
+  }
+
   // Transaction Type Finalization — a Transfer whose destination resolves to one of the
   // user's own accounts needs no counterparty name at all (source + destination already
   // say everything); merchant is hidden entirely and forced empty at save
@@ -189,10 +209,9 @@ export function ReviewScreen({
     ...new Set(masterData.categories.filter((c) => c.primary === primary).flatMap((c) => c.subcategories)),
   ];
 
-  // Live summary — recomputed from the edited amounts. Tax/discount come from the AI
-  // header and are read-only in C3.
-  const tax = result.header.tax ?? 0;
-  const discount = result.header.discount ?? 0;
+  // Live summary — recomputed from the edited amounts, including the now-editable tax/discount.
+  const tax = taxDraft.trim() !== "" ? Number(taxDraft) : 0;
+  const discount = discountDraft.trim() !== "" ? Number(discountDraft) : 0;
   const subtotal = itemDrafts.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const grandTotal = subtotal + tax - discount;
 
@@ -203,8 +222,10 @@ export function ReviewScreen({
     if (itemDrafts.length === 0) errors.push("At least one line item is required.");
     if (itemDrafts.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) errors.push("Amounts cannot be negative.");
     if (itemDrafts.some((i) => qtyIsNegative(i.qty))) errors.push("Quantities cannot be negative.");
+    if (taxDraft.trim() !== "" && Number(taxDraft) < 0) errors.push("Tax cannot be negative.");
+    if (discountDraft.trim() !== "" && Number(discountDraft) < 0) errors.push("Discount cannot be negative.");
     return errors;
-  }, [headerDraft.merchant, headerDraft.transactionType, itemDrafts]);
+  }, [headerDraft.merchant, headerDraft.transactionType, itemDrafts, taxDraft, discountDraft]);
 
   const canSave = validationErrors.length === 0 && !saving;
 
@@ -230,8 +251,8 @@ export function ReviewScreen({
           packSize: i.packSize ?? null,
           unitPrice: i.unitPrice != null && i.unitPrice.trim() !== "" ? Number(i.unitPrice) : null,
         })),
-        tax: result.header.tax,
-        discount: result.header.discount,
+        tax: taxDraft.trim() !== "" ? Number(taxDraft) : null,
+        discount: discountDraft.trim() !== "" ? Number(discountDraft) : null,
       };
       await onSave(reviewed);
     } catch (err) {
@@ -439,6 +460,8 @@ export function ReviewScreen({
                     isOpen={expandedItem === i}
                     onToggle={() => setExpandedItem(expandedItem === i ? null : i)}
                     onChange={(patch) => setItem(i, patch)}
+                    onDelete={itemDrafts.length > 1 ? () => removeItem(i) : undefined}
+                    isOnlyItem={itemDrafts.length === 1}
                     primaryOptions={primaryOptions}
                     secondaryOptionsFor={subcategoriesFor}
                   />
@@ -452,8 +475,8 @@ export function ReviewScreen({
             <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Summary</p>
             <div className="rounded-[var(--radius-lg)] border border-border bg-card p-4 shadow-md">
               <SummaryRow label="Items Total" value={`${currencyPrefix(headerDraft.currency)}${fmt(subtotal)}`} />
-              <SummaryRow label="Discount" value={result.header.discount !== null ? `− ${currencyPrefix(headerDraft.currency)}${fmt(discount)}` : "—"} />
-              <SummaryRow label="Tax" value={result.header.tax !== null ? `${currencyPrefix(headerDraft.currency)}${fmt(tax)}` : "—"} />
+              <EditableSummaryRow label="Discount" prefix={currencyPrefix(headerDraft.currency)} value={discountDraft} onChange={setDiscountDraft} sign="−" />
+              <EditableSummaryRow label="Tax" prefix={currencyPrefix(headerDraft.currency)} value={taxDraft} onChange={setTaxDraft} />
               <div className="mt-2.5 flex items-baseline justify-between border-t border-border pt-3">
                 <span className="text-[13.5px] font-bold">Final Total</span>
                 <span className="font-mono text-[17px] font-bold tabular-nums">
@@ -585,6 +608,49 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-baseline justify-between py-1">
       <span className="text-[12.5px] text-muted-foreground">{label}</span>
       <span className="font-mono text-[13px] font-semibold tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+/** Editable Tax and Discount (Transaction Workspace Final UX Polish) — same row layout
+ *  as SummaryRow, with the value replaced by an inline input. Empty is a valid, distinct
+ *  state from "0" (see ReviewScreen's taxDraft/discountDraft comment). */
+function EditableSummaryRow({
+  label,
+  prefix,
+  value,
+  onChange,
+  sign,
+}: {
+  label: string;
+  prefix: string;
+  value: string;
+  onChange: (value: string) => void;
+  /** A leading sign shown before the amount (e.g. "−" for Discount) — display only, the
+   *  stored value itself is never negated. */
+  sign?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-[12.5px] text-muted-foreground">{label}</span>
+      <div className="flex items-baseline gap-1">
+        {sign && value.trim() !== "" && <span className="font-mono text-[13px] font-semibold text-muted-foreground">{sign}</span>}
+        <span className="font-mono text-[13px] font-semibold text-muted-foreground">{prefix}</span>
+        <input
+          type="number"
+          inputMode="decimal"
+          step="0.01"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="0.00"
+          aria-label={label}
+          className={cn(
+            "w-16 bg-transparent text-right font-mono text-[13px] font-semibold tabular-nums outline-none",
+            "placeholder:text-muted-foreground/50 focus:text-primary",
+            value.trim() !== "" && Number(value) < 0 && "text-destructive"
+          )}
+        />
+      </div>
     </div>
   );
 }

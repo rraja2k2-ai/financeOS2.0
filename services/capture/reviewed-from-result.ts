@@ -6,13 +6,32 @@
  * per CLAUDE.md's "no duplicated logic."
  */
 import type { CaptureReceiptResult } from "@/services/ai/ai-provider";
-import type { ReviewedCapture } from "./save-capture.service";
+import { merchantRequiredFor, type ReviewedCapture } from "./save-capture.service";
 import { TRANSACTION_TYPES, isTransactionType } from "@/constants/transaction-types";
 
+/** Unknown Vendor Fallback (Transaction Workspace Final UX Polish) — the single place a
+ *  missing merchant is defaulted; change this one constant to use a different placeholder. */
+export const UNKNOWN_VENDOR_PLACEHOLDER = "Unknown Vendor";
+
 export function reviewedFromResult(result: CaptureReceiptResult): ReviewedCapture {
+  const transactionType =
+    result.header.transactionType && isTransactionType(result.header.transactionType) ? result.header.transactionType : TRANSACTION_TYPES.EXPENSE;
+
+  // Unknown Vendor Fallback — the AI occasionally can't extract a merchant name (a
+  // faded, damaged, or unusually laid-out receipt). Merchant is only required for
+  // EXPENSE/REFUND (merchantRequiredFor, save-capture.service.ts's validateForType);
+  // defaulting it here — the same place transactionType above already defaults an
+  // invalid/missing value — means an otherwise-readable receipt never fails and lands
+  // in the Capture Inbox as Failed just because one field came back blank. The user
+  // corrects it later like any other field, exactly as they already can today. A type
+  // that doesn't require a merchant (INCOME/TRANSFER/ADJUSTMENT) is untouched — an empty
+  // merchant there is already valid, established behavior.
+  const merchant = result.header.merchant ?? "";
+  const resolvedMerchant = merchant.trim() ? merchant : merchantRequiredFor(transactionType) ? UNKNOWN_VENDOR_PLACEHOLDER : merchant;
+
   return {
     header: {
-      merchant: result.header.merchant ?? "",
+      merchant: resolvedMerchant,
       transactionDate: result.header.transactionDate ?? "",
       currency: result.header.currency ?? "",
       paymentMethod: result.header.paymentMethod ?? "",
@@ -20,8 +39,7 @@ export function reviewedFromResult(result: CaptureReceiptResult): ReviewedCaptur
       project: result.headerSuggestions.project ?? "",
       destinationAccount: result.headerSuggestions.destinationAccount ?? "",
       notes: result.header.notes ?? "",
-      transactionType:
-        result.header.transactionType && isTransactionType(result.header.transactionType) ? result.header.transactionType : TRANSACTION_TYPES.EXPENSE,
+      transactionType,
     },
     items: result.items.map((item) => ({
       description: item.description,

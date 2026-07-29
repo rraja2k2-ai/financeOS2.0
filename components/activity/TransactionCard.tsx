@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import { currencyPrefix } from "@/lib/currency";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
-import { fmt, formatCapturedAt, formatFullDate, formatQty, highlight, subtitleCategory, transactionTitle } from "./activity-format";
+import { fmt, formatCapturedAt, formatFullDate, formatQty, highlight, sourceAccountSubline, subtitleCategory, transactionTitle } from "./activity-format";
 import { categoryIcon } from "@/constants/category-icons";
 
 /**
@@ -68,12 +68,14 @@ export function TransactionCard({
   accountCurrency,
 }: TransactionCardProps) {
   const Icon = categoryIcon(t.primaryCategory);
-  const title = transactionTitle({
+  const titleInput = {
     transactionType: t.transactionType,
     merchant: t.merchant,
     sourceAccountName: t.sourceAccountId ? (accountNameById[t.sourceAccountId] ?? null) : null,
     destinationAccountName: t.targetAccountId ? (accountNameById[t.targetAccountId] ?? null) : null,
-  });
+  };
+  const title = transactionTitle(titleInput);
+  const sourceAccount = sourceAccountSubline(titleInput);
   const isLongReceipt = t.items.length > LONG_RECEIPT_THRESHOLD;
   const visibleItems = isLongReceipt && !showAllItems ? t.items.slice(0, DEFAULT_VISIBLE_ITEMS) : t.items;
   const hiddenCount = t.items.length - visibleItems.length;
@@ -169,6 +171,9 @@ export function TransactionCard({
                 </div>
               </>
             )}
+            {/* Source Account Visibility — subdued, below the amount; null for an
+                internal Transfer since the title already shows "Source → Destination". */}
+            {sourceAccount && <div className="mt-0.5 truncate text-[10.5px] text-muted-foreground">{sourceAccount}</div>}
           </div>
         </button>
 
