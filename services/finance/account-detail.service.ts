@@ -9,6 +9,7 @@ import * as transactionHeaderRepository from "@/repositories/transaction-header.
 import * as transactionItemRepository from "@/repositories/transaction-item.repository";
 import { isExpenseTransaction } from "@/lib/expense-filter";
 import { categoryTypeFor } from "@/constants/categories";
+import { convertFromBaseCurrency } from "./exchange.service";
 import { toActivityTransaction, type ActivityTransaction } from "./activity.service";
 
 export type AccountPeriodSummary = {
@@ -53,10 +54,14 @@ export async function getAccountPeriodSummary(
 }
 
 /** Newest `limit` transactions for one account in [startDate, endDate], items included —
- *  the Recent Transactions preview. Never fetches beyond `limit` headers/items. */
+ *  the Recent Transactions preview. Never fetches beyond `limit` headers/items.
+ *  `accountCurrency` powers the Cross-Currency Display bug fix below — pass the already-
+ *  loaded account's own currency (the caller already fetched the account row, so this is
+ *  a zero-extra-query parameter, not a new lookup). */
 export async function getRecentTransactionsForAccount(
   supabase: SupabaseClient,
   accountId: string,
+  accountCurrency: string,
   startDate: string,
   endDate: string,
   limit: number
@@ -76,5 +81,28 @@ export async function getRecentTransactionsForAccount(
     itemsByHeader.get(item.header_id)!.push(item);
   }
 
-  return headers.map((header) => toActivityTransaction(header, itemsByHeader.get(header.id) ?? []));
+  const transactions = headers.map((header) => toActivityTransaction(header, itemsByHeader.get(header.id) ?? []));
+
+  // Bug Fix (Account Details Cross-Currency Display) — a transaction recorded in a
+  // currency other than the account being viewed (e.g. a POSB Bank (SGD) -> Cash - INR
+  // Transfer, viewed from Cash - INR) previously had no amount in the account's own
+  // currency at all, so TransactionCard fell back to a bare SGD figure with no account
+  // context. Reuses the same reverse exchange-rate lookup the Account Posting Engine
+  // already relies on for a cross-currency destination's own-currency delta (CLAUDE.md
+  // §11 Parking Lot — "no schema change needed") — never a second conversion design.
+  // `limit` bounds this to a handful of rows (the Recent Transactions preview), so one
+  // lookup per qualifying row is the existing service call, not a new N+1 pattern. A
+  // missing exchange rate degrades gracefully (§6) — the row just falls back to
+  // TransactionCard's existing SGD display instead of failing the whole page.
+  return Promise.all(
+    transactions.map(async (t) => {
+      if (t.currency === accountCurrency) return t;
+      try {
+        const accountNativeAmount = await convertFromBaseCurrency(supabase, t.sgdAmount, accountCurrency);
+        return { ...t, accountNativeAmount };
+      } catch {
+        return t;
+      }
+    })
+  );
 }

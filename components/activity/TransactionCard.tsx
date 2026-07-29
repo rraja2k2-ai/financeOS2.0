@@ -47,6 +47,11 @@ export type TransactionCardProps = {
   /** id -> account_name, for the type-aware title (an internal Transfer needs the
    *  destination account's NAME) — see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
+  /** Bug Fix (Account Details Cross-Currency Display) — the currency of the account whose
+   *  history this card is part of. Only Account Detail passes this; Activity/Dashboard
+   *  leave it undefined and keep the existing currencyGroup-driven amount display below
+   *  completely unchanged. */
+  accountCurrency?: string;
 };
 
 export function TransactionCard({
@@ -60,6 +65,7 @@ export function TransactionCard({
   showAllItems = false,
   onShowAllItems,
   accountNameById,
+  accountCurrency,
 }: TransactionCardProps) {
   const Icon = categoryIcon(t.primaryCategory);
   const title = transactionTitle({
@@ -103,7 +109,39 @@ export function TransactionCard({
             </p>
           </div>
           <div className="flex-none text-right">
-            {t.currencyGroup === "INR" ? (
+            {accountCurrency ? (
+              // Bug Fix (Account Details Cross-Currency Display) — Account Detail passes
+              // the viewed account's own currency, so the primary figure is always what
+              // that account's balance actually moved by, never a bare unrelated currency.
+              t.currency === accountCurrency ? (
+                <div className="font-mono text-[18px] font-bold tabular-nums">
+                  {currencyPrefix(accountCurrency)}
+                  {fmt(t.originalAmount)}
+                </div>
+              ) : accountCurrency === "SGD" ? (
+                <>
+                  <div className="font-mono text-[18px] font-bold tabular-nums">
+                    {currencyPrefix("SGD")}
+                    {fmt(t.sgdAmount)}
+                  </div>
+                  <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">
+                    {currencyPrefix(t.currency)}
+                    {fmt(t.originalAmount)}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="font-mono text-[18px] font-bold tabular-nums">
+                    {currencyPrefix(accountCurrency)}
+                    {fmt(t.accountNativeAmount ?? t.sgdAmount)}
+                  </div>
+                  <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground tabular-nums">
+                    ≈ {currencyPrefix("SGD")}
+                    {fmt(t.sgdAmount)}
+                  </div>
+                </>
+              )
+            ) : t.currencyGroup === "INR" ? (
               <>
                 <div className="font-mono text-[18px] font-bold tabular-nums">
                   {currencyPrefix("INR")}

@@ -253,7 +253,12 @@ export function ActivityView({
         (t) =>
           t.transactionDate >= periodStart &&
           t.transactionDate <= periodEnd &&
-          (!accountId || t.sourceAccountId === accountId) &&
+          // Bug Fix (Account Details / Activity Filter Consistency) — must match Account
+          // Detail's own listByAccountId() query (source OR target), the same two columns
+          // the Posting Engine posts against, or a Transfer visible in an account's Recent
+          // Transactions would vanish from "See All Transactions" (which filters this same
+          // client-side list by accountId).
+          (!accountId || t.sourceAccountId === accountId || t.targetAccountId === accountId) &&
           (!categoryFilter ||
             t.items.some((it) => it.primaryCategory === categoryFilter && (!subcategoryFilter || it.secondaryCategory === subcategoryFilter)))
       ),

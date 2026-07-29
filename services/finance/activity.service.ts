@@ -57,6 +57,12 @@ export type ActivityTransaction = {
   transactionType: string;
   /** SGD if currency !== INR, INR if currency === INR — per the Activity screen's two-bucket design. */
   currencyGroup: "SGD" | "INR";
+  /** Bug Fix (Account Details Cross-Currency Display) — sgdAmount converted into the
+   *  currency of the account being viewed, set only when that differs from this
+   *  transaction's own `currency`. Populated exclusively by Account Detail's
+   *  getRecentTransactionsForAccount() (account-detail.service.ts); always undefined for
+   *  Activity and Dashboard, which are unaffected by this field. */
+  accountNativeAmount?: number;
   items: ActivityItem[];
 };
 
