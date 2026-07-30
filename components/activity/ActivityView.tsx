@@ -12,8 +12,10 @@ import { TopCategoriesCard } from "@/components/shared/TopCategoriesCard";
 import { categoryActivityHref, resolvePeriodRange, startOfMonthIso, todayIso, type PeriodKey } from "@/lib/period";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
+import { TransactionDetailView } from "@/components/activity/TransactionDetailView";
 import { TransactionCard } from "@/components/activity/TransactionCard";
-import { fmt, formatQty, highlight } from "@/components/activity/activity-format";
+import { fmt } from "@/components/activity/activity-format";
+import { FilteredLineItemList, filterLineItems, type FilteredLineItem } from "@/components/activity/FilteredLineItemList";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
 import { useOverflowMenu } from "@/hooks/useOverflowMenu";
 import { isExpenseTransaction } from "@/lib/expense-filter";
@@ -54,12 +56,6 @@ export type ActivityViewProps = {
    *  see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
 };
-
-/** Only used by the search-results view below (the main list's cards use TransactionCard, which doesn't need it). */
-function categoryPath(primary: string | null, secondary: string | null): string {
-  if (primary && secondary) return `${primary} > ${secondary}`;
-  return primary ?? secondary ?? "—";
-}
 
 export function ActivityView({
   transactions,
@@ -128,6 +124,25 @@ export function ActivityView({
     onError: setActionError,
   });
 
+  // Introduce Transaction Details (Read-Only) — "Browsing = Transaction Details,
+  // Editing = Transaction Workspace". Both screens read the SAME `editing` data
+  // useTransactionEditor already fetches (result/itemIds/capturedAt/masterData); this
+  // just toggles which of the two presentations is shown over it, so switching between
+  // them (Edit, or Back from Workspace) never refetches anything.
+  const [detailMode, setDetailMode] = useState<"view" | "edit" | null>(null);
+
+  /** Every normal browsing entry point (overflow menu, Search result, Category Filter
+   *  row) opens read-only Details first — never the Workspace directly. */
+  function openDetails(txnId: string) {
+    setDetailMode("view");
+    handleEdit(txnId);
+  }
+
+  function closeDetails() {
+    setDetailMode(null);
+    closeEditor();
+  }
+
   // Header overflow menu (UX refresh Phase C) + Receipt Viewer (Phase D). The menu
   // renders through a portal (Fix 5.3) so it's never clipped by the transaction card's
   // overflow-hidden — position is computed from the trigger button's own rect, not CSS.
@@ -182,6 +197,9 @@ export function ActivityView({
     if (!autoEdit || !highlightId) return;
     if (autoEditFiredRef.current === highlightId) return;
     autoEditFiredRef.current = highlightId;
+    // Post-Save Review goes straight to the Workspace, bypassing Details — this is a
+    // deliberate one-time correction pass right after a fresh capture, not browsing.
+    setDetailMode("edit");
     handleEdit(highlightId);
   }, [autoEdit, highlightId, handleEdit]);
 
@@ -231,20 +249,6 @@ export function ActivityView({
     setReceiptLoadingId(null);
   }
 
-  /**
-   * Clicking a matched item in search results jumps to its parent transaction in the
-   * normal (non-search) list, expanded and scrolled into view — the transaction is
-   * already guaranteed to be in the current period/group since matchedItems is derived
-   * from groupTxns, so no filter changes are needed, just clearing the search query.
-   */
-  function jumpToTransaction(txnId: string) {
-    setQuery("");
-    setExpanded(txnId);
-    requestAnimationFrame(() => {
-      document.getElementById(`txn-${txnId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-  }
-
   const { start: periodStart, end: periodEnd } = resolvePeriodRange(period, customStart, customEnd);
 
   const inPeriod = useMemo(
@@ -284,44 +288,31 @@ export function ActivityView({
   const groupTxns = group === "SGD" ? sgdGroupTxns : inrGroupTxns;
   const q = query.trim().toLowerCase();
 
-  // Search mode: surface matching LINE ITEMS directly (not whole transactions) — a
-  // "milk" search should show just the milk line(s) and their own total, not every
-  // item on a receipt that happens to contain milk somewhere.
-  type MatchedItem = ActivityTransaction["items"][number] & {
-    txnId: string;
-    merchant: string | null;
-    transactionDate: string;
-    currency: string;
-  };
-
-  const matchedItems: MatchedItem[] = useMemo(() => {
+  // Unify Filtered Line Item Experience — "Filtering = Line Items" (design principle):
+  // both Search and Category Filter flatten groupTxns down to individual matching line
+  // items via the same shared filterLineItems() (FilteredLineItemList.tsx), differing
+  // only in their predicate. groupTxns is already category-filtered upstream (inPeriod
+  // above), so a "milk" search while a category chip is active still only searches
+  // within that category — never a separate, conflicting narrowing step.
+  const matchedItems: FilteredLineItem[] = useMemo(() => {
     if (!q) return [];
-    const results: MatchedItem[] = [];
-    for (const t of groupTxns) {
-      for (const item of t.items) {
-        const hit =
-          (item.description ?? "").toLowerCase().includes(q) ||
-          (item.primaryCategory ?? "").toLowerCase().includes(q) ||
-          (item.secondaryCategory ?? "").toLowerCase().includes(q) ||
-          (t.merchant ?? "").toLowerCase().includes(q);
-        if (hit) {
-          results.push({ ...item, txnId: t.id, merchant: t.merchant, transactionDate: t.transactionDate, currency: t.currency });
-        }
-      }
-    }
-    return results;
+    return filterLineItems(
+      groupTxns,
+      (item, t) =>
+        (item.description ?? "").toLowerCase().includes(q) ||
+        (item.primaryCategory ?? "").toLowerCase().includes(q) ||
+        (item.secondaryCategory ?? "").toLowerCase().includes(q) ||
+        (t.merchant ?? "").toLowerCase().includes(q)
+    );
   }, [groupTxns, q]);
 
-  const matchedTotal = matchedItems.reduce((sum, i) => sum + i.itemTotal, 0);
-
-  const matchedByDate = useMemo(() => {
-    const map = new Map<string, MatchedItem[]>();
-    for (const i of matchedItems) {
-      if (!map.has(i.transactionDate)) map.set(i.transactionDate, []);
-      map.get(i.transactionDate)!.push(i);
-    }
-    return Array.from(map.entries());
-  }, [matchedItems]);
+  const categoryFilteredItems: FilteredLineItem[] = useMemo(() => {
+    if (!categoryFilter || q) return [];
+    return filterLineItems(
+      groupTxns,
+      (item) => item.primaryCategory === categoryFilter && (!subcategoryFilter || item.secondaryCategory === subcategoryFilter)
+    );
+  }, [groupTxns, categoryFilter, subcategoryFilter, q]);
 
   // groupTxns is already sorted newest-receipt-date-first (activity.service.ts), so the
   // Map's insertion order — and therefore this date grouping — stays newest first too.
@@ -431,57 +422,14 @@ export function ActivityView({
       </p>
 
       {q ? (
-        matchedItems.length === 0 ? (
-          <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center text-[12.5px] text-muted-foreground">
-            No items match &ldquo;{query}&rdquo; in this period.
-          </div>
-        ) : (
-          <>
-            <div className="mb-3 flex items-center justify-between rounded-[var(--radius-md)] bg-secondary px-3.5 py-2.5">
-              <span className="text-[12px] font-semibold text-muted-foreground">
-                {matchedItems.length} matching item{matchedItems.length === 1 ? "" : "s"}
-              </span>
-              <span className="font-mono text-[13.5px] font-bold tabular-nums">
-                {group === "INR" ? "₹" : "SGD "}
-                {fmt(matchedTotal)}
-              </span>
-            </div>
-            {matchedByDate.map(([date, items]) => (
-              <div key={date} className="mb-4">
-                <p className="mb-2 text-[11.5px] font-bold uppercase tracking-wide text-muted-foreground">
-                  {new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" })}
-                </p>
-                <div className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-card">
-                  {items.map((item, i) => (
-                    <button
-                      key={item.id}
-                      onClick={() => jumpToTransaction(item.txnId)}
-                      className={cn(
-                        "flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left text-[12px]",
-                        i > 0 && "border-t border-border"
-                      )}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-foreground">{highlight(item.description, q)}</p>
-                        <p className="mt-0.5 text-[10.5px] text-muted-foreground">{highlight(item.merchant, q)}</p>
-                        <p className="mt-0.5 text-[10.5px]">
-                          {formatQty(item.qty) && <span className="font-medium text-primary">{formatQty(item.qty)} </span>}
-                          <span className="text-muted-foreground">
-                            {formatQty(item.qty) ? "| " : ""}
-                            {highlight(categoryPath(item.primaryCategory, item.secondaryCategory), q)}
-                          </span>
-                        </p>
-                      </div>
-                      <span className="flex-none text-right font-mono font-semibold tabular-nums">
-                        {item.currency} {fmt(item.itemTotal)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </>
-        )
+        <FilteredLineItemList
+          items={matchedItems}
+          emptyMessage={`No items match "${query}" in this period.`}
+          query={q}
+          onOpenItem={openDetails}
+        />
+      ) : categoryFilter ? (
+        <FilteredLineItemList items={categoryFilteredItems} emptyMessage="No items match this category filter." onOpenItem={openDetails} />
       ) : byDate.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center text-[12.5px] text-muted-foreground">
           No transactions match this filter.
@@ -529,11 +477,11 @@ export function ActivityView({
               onClick={() => {
                 const id = menuAnchor.id;
                 closeMenu();
-                handleEdit(id);
+                openDetails(id);
               }}
               className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
             >
-              {editLoadingId === menuAnchor.id ? "Loading…" : "Edit"}
+              {editLoadingId === menuAnchor.id ? "Loading…" : "View Details"}
             </button>
             <button
               type="button"
@@ -563,18 +511,35 @@ export function ActivityView({
           document.body
         )}
 
-      {/* Edit — the SAME Review screen used by Capture, populated from the saved transaction.
-          Save UPDATEs it, never creates a new one. Delete (Transaction Workspace Foundation)
-          is a second way to remove a transaction, alongside this card's own quick-delete
-          (confirmingDeleteId/handleDelete) above — both end up calling the same DELETE API. */}
-      {editing && (
+      {/* Transaction Details (Read-Only) — the universal drill-down destination (Introduce
+          Transaction Details milestone): every browsing entry point above (overflow menu,
+          Search result, Category Filter row) opens this first. Its own "Edit" button
+          switches detailMode to "edit", rendering the Workspace below on the SAME already-
+          fetched `editing` data — no refetch, and Back from the Workspace returns here
+          (detailMode -> "view") rather than closing outright. */}
+      {editing && detailMode === "view" && (
+        <TransactionDetailView
+          result={editing.result}
+          capturedAt={editing.capturedAt}
+          headerId={editing.headerId}
+          onBack={closeDetails}
+          onEdit={() => setDetailMode("edit")}
+        />
+      )}
+
+      {/* Transaction Workspace (Edit) — the SAME Review screen used by Capture, populated
+          from the saved transaction. Save UPDATEs it, never creates a new one. Delete
+          (Transaction Workspace Foundation) is a second way to remove a transaction,
+          alongside this card's own quick-delete (confirmingDeleteId/handleDelete) above —
+          both end up calling the same DELETE API. */}
+      {editing && detailMode === "edit" && (
         <ReviewScreen
           result={editing.result}
           masterData={masterData}
           capturedAt={editing.capturedAt}
           headerId={editing.headerId}
           itemIds={editing.itemIds}
-          onCancel={closeEditor}
+          onCancel={() => setDetailMode("view")}
           onSave={saveEditor}
           onDelete={deleteEditor}
         />
