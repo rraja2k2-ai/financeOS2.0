@@ -8,6 +8,7 @@
 import type { CaptureReceiptResult } from "@/services/ai/ai-provider";
 import { merchantRequiredFor, type ReviewedCapture } from "./save-capture.service";
 import { TRANSACTION_TYPES, isTransactionType } from "@/constants/transaction-types";
+import { normalizeMerchantName, normalizeItemDescription } from "./text-normalization";
 
 /** Unknown Vendor Fallback (Transaction Workspace Final UX Polish) — the single place a
  *  missing merchant is defaulted; change this one constant to use a different placeholder. */
@@ -28,10 +29,15 @@ export function reviewedFromResult(result: CaptureReceiptResult): ReviewedCaptur
   // merchant there is already valid, established behavior.
   const merchant = result.header.merchant ?? "";
   const resolvedMerchant = merchant.trim() ? merchant : merchantRequiredFor(transactionType) ? UNKNOWN_VENDOR_PLACEHOLDER : merchant;
+  // Text Normalization (Multi-Page Receipt Capture) — applied here, the one shared
+  // mapping both the Review Screen's initial draft AND the direct-save path use, so
+  // normalization always runs before either display or persistence. UNKNOWN_VENDOR_PLACEHOLDER
+  // is already mixed-case and passes through unchanged.
+  const normalizedMerchant = normalizeMerchantName(resolvedMerchant);
 
   return {
     header: {
-      merchant: resolvedMerchant,
+      merchant: normalizedMerchant,
       transactionDate: result.header.transactionDate ?? "",
       currency: result.header.currency ?? "",
       paymentMethod: result.header.paymentMethod ?? "",
@@ -42,7 +48,7 @@ export function reviewedFromResult(result: CaptureReceiptResult): ReviewedCaptur
       transactionType,
     },
     items: result.items.map((item) => ({
-      description: item.description,
+      description: normalizeItemDescription(item.description),
       // Qty is a single free-text field combining count + unit + (when present) the
       // printed pack size — "1 bag (5 kg)", "1.356 kg", "1 bottle (2 L)" — so a bagged/
       // bottled product's size stays visible even though the Review Screen doesn't
