@@ -110,6 +110,20 @@ export function transactionTitle(t: TransactionTitleInput): string {
 }
 
 /**
+ * Source Account Visibility (Transaction Workspace Final UX Polish) — a subdued line
+ * under the card's amount, so which account funded a transaction is visible without
+ * opening Edit. Shared by TransactionCard (Activity + Account Detail) and Dashboard's own
+ * Recent Transactions row so both surfaces agree on when to show it: null for an internal
+ * Transfer, since transactionTitle() above already renders "Source → Destination" there —
+ * repeating the source account a second time would be redundant, not helpful.
+ */
+export function sourceAccountSubline(t: TransactionTitleInput): string | null {
+  const isInternalTransfer = t.transactionType === TRANSACTION_TYPES.TRANSFER && !!t.destinationAccountName;
+  if (isInternalTransfer) return null;
+  return t.sourceAccountName;
+}
+
+/**
  * UAT Defect Fix (Posting Engine milestone) — the subtitle line next to a card's title.
  * A non-Expense/Refund transaction's per-item category is usually just "Miscellaneous"
  * (money-movement rows have no real spending category), which reads as a misleading

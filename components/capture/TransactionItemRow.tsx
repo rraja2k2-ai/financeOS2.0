@@ -40,6 +40,8 @@ export function TransactionItemRow({
   isOpen,
   onToggle,
   onChange,
+  onDelete,
+  isOnlyItem,
   primaryOptions,
   secondaryOptionsFor,
 }: {
@@ -47,6 +49,13 @@ export function TransactionItemRow({
   isOpen: boolean;
   onToggle: () => void;
   onChange: (patch: Partial<ItemDraft>) => void;
+  /** Individual Line Item Deletion (Transaction Workspace Final UX Polish) — omitted
+   *  entirely (no button rendered) when this is the last remaining item, so a receipt
+   *  can never be edited down to zero items (ReviewScreen already requires at least one). */
+  onDelete?: () => void;
+  /** True only when this is the sole remaining item — shows why no delete button exists
+   *  instead of leaving its absence unexplained. */
+  isOnlyItem?: boolean;
   primaryOptions: string[];
   secondaryOptionsFor: (primary: string) => string[];
 }) {
@@ -72,7 +81,14 @@ export function TransactionItemRow({
             {amountNum !== null ? fmt(amountNum) : "—"}
           </span>
         </div>
-        {line2 && <p className="truncate text-[11.5px] text-muted-foreground">{line2}</p>}
+        {line2 && (
+          <p
+            className={cn("truncate text-[11.5px] text-muted-foreground", qtyIsNegative(item.qty) && "font-semibold text-destructive")}
+            role={qtyIsNegative(item.qty) ? "alert" : undefined}
+          >
+            {line2}
+          </p>
+        )}
       </button>
 
       {/* Expanded — the exact same editable controls as before; only a light background
@@ -141,6 +157,22 @@ export function TransactionItemRow({
                 )}
               />
             </div>
+
+            {onDelete ? (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="mt-3 w-full border-t border-border/60 pt-3 text-center text-[11.5px] font-semibold text-destructive"
+              >
+                Delete Item
+              </button>
+            ) : (
+              isOnlyItem && (
+                <p className="mt-3 border-t border-border/60 pt-3 text-center text-[11px] text-muted-foreground">
+                  At least one item is required — this is the only one left.
+                </p>
+              )
+            )}
           </div>
         </div>
       </div>

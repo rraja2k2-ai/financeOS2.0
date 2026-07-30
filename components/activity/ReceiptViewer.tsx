@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type ReceiptViewerPage = {
   url: string;
@@ -8,14 +8,98 @@ export type ReceiptViewerPage = {
   pageNo: number;
 };
 
+const MIN_SCALE = 1;
+const MAX_SCALE = 3;
+const DOUBLE_TAP_SCALE = 2.2;
+const DOUBLE_TAP_WINDOW_MS = 300;
+
+function touchDistance(touches: TouchList | React.TouchList): number {
+  const a = touches[0];
+  const b = touches[1];
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
 /**
  * Full-screen viewer for a saved transaction's original receipt file(s) (UX refresh
  * Phase D). Read-only — reuses the stored original untouched, no thumbnails/derived
  * copies. Same full-screen overlay pattern as ReviewScreen/CaptureModal.
+ *
+ * Lightweight Receipt Zoom (Transaction Workspace Final UX Polish) — plain CSS
+ * transform + raw touch events; no gesture library, since none exists in this codebase
+ * and a hand-rolled pinch/double-tap is small enough not to warrant adding one. Deliberately
+ * narrow: no pan-boundary clamping, no momentum, no crop/rotate/annotate — just scale and
+ * a direct-follow drag while zoomed. Resets on page change so Prev/Next never carries a
+ * stale zoom level into the next page. PDFs are untouched (the browser's own PDF viewer
+ * already handles zoom).
  */
 export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; onClose: () => void }) {
   const [index, setIndex] = useState(0);
   const page = pages[index];
+
+  const [scale, setScale] = useState(1);
+  const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const imageWrapRef = useRef<HTMLDivElement>(null);
+  const pinchStart = useRef<{ distance: number; scale: number } | null>(null);
+  const panStart = useRef<{ x: number; y: number } | null>(null);
+  const lastTapAt = useRef(0);
+
+  useEffect(() => {
+    setScale(1);
+    setTranslate({ x: 0, y: 0 });
+  }, [index]);
+
+  function toggleZoom() {
+    setScale((s) => (s > 1 ? MIN_SCALE : DOUBLE_TAP_SCALE));
+    setTranslate({ x: 0, y: 0 });
+  }
+
+  // Only touchmove needs a manual, non-passive listener — preventDefault() inside a JSX
+  // onTouchMove is silently ignored (React attaches touchmove passively by default), and
+  // without it the browser's own page/pinch gestures fight with ours mid-gesture.
+  useEffect(() => {
+    const el = imageWrapRef.current;
+    if (!el) return;
+
+    function onTouchMove(e: TouchEvent) {
+      if (e.touches.length === 2 && pinchStart.current) {
+        e.preventDefault();
+        const ratio = touchDistance(e.touches) / pinchStart.current.distance;
+        const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, pinchStart.current.scale * ratio));
+        setScale(next);
+        if (next === MIN_SCALE) setTranslate({ x: 0, y: 0 });
+      } else if (e.touches.length === 1 && panStart.current) {
+        e.preventDefault();
+        const t = e.touches[0];
+        setTranslate({ x: t.clientX - panStart.current.x, y: t.clientY - panStart.current.y });
+      }
+    }
+
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => el.removeEventListener("touchmove", onTouchMove);
+  }, []);
+
+  function onTouchStart(e: React.TouchEvent) {
+    if (e.touches.length === 2) {
+      pinchStart.current = { distance: touchDistance(e.touches), scale };
+      panStart.current = null;
+      return;
+    }
+    if (e.touches.length === 1) {
+      const now = Date.now();
+      if (now - lastTapAt.current < DOUBLE_TAP_WINDOW_MS) {
+        toggleZoom();
+        lastTapAt.current = 0;
+      } else {
+        lastTapAt.current = now;
+      }
+      panStart.current = scale > 1 ? { x: e.touches[0].clientX - translate.x, y: e.touches[0].clientY - translate.y } : null;
+    }
+  }
+
+  function onTouchEnd(e: React.TouchEvent) {
+    if (e.touches.length < 2) pinchStart.current = null;
+    if (e.touches.length === 0) panStart.current = null;
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -48,14 +132,29 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
         </button>
       </div>
 
-      <div className="flex flex-1 items-center justify-center overflow-auto p-4">
+      <div
+        ref={imageWrapRef}
+        className="flex flex-1 items-center justify-center overflow-hidden p-4"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
         {!page ? (
           <p className="text-[13px] text-white/70">Receipt not available.</p>
         ) : page.mimeType === "application/pdf" ? (
           <iframe src={page.url} title={`Receipt page ${page.pageNo}`} className="h-full w-full rounded-lg bg-white" />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL, not optimizable
-          <img src={page.url} alt={`Receipt page ${page.pageNo}`} className="max-h-full max-w-full rounded-lg object-contain" />
+          <img
+            src={page.url}
+            alt={`Receipt page ${page.pageNo}`}
+            onDoubleClick={toggleZoom}
+            draggable={false}
+            className="max-h-full max-w-full touch-none select-none rounded-lg object-contain transition-transform duration-150 ease-out"
+            style={{
+              transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
+              cursor: scale > 1 ? "grab" : "zoom-in",
+            }}
+          />
         )}
       </div>
 

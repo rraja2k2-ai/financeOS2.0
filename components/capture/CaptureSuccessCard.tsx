@@ -44,6 +44,7 @@ export function CaptureSuccessCard({
   onRetry,
   onReview,
   reviewBusy,
+  onContinue,
   onDone,
 }: {
   thumbnailUrl: string | null;
@@ -53,6 +54,11 @@ export function CaptureSuccessCard({
   onRetry: () => void;
   onReview: () => void;
   reviewBusy: boolean;
+  /** Capture Complete Workflow (Transaction Workspace Final UX Polish) — resets the modal
+   *  for the next receipt without closing it, for batch capture sessions. */
+  onContinue: () => void;
+  /** "Exit Capture" — leaves Capture and returns to the app. Same behavior as the old
+   *  "Done": closes, no navigation anywhere. */
   onDone: () => void;
 }) {
   return (
@@ -103,12 +109,17 @@ export function CaptureSuccessCard({
           >
             {reviewBusy ? "Loading…" : "Review Transaction"}
           </button>
+          {/* Capture Complete Workflow — batch capture never has to leave the modal;
+              Exit Capture (previously "Done") stays the way out. */}
           <button
             type="button"
-            onClick={onDone}
+            onClick={onContinue}
             className="w-full rounded-[var(--radius-md)] border border-border bg-card py-3 text-[14px] font-semibold"
           >
-            Done
+            Continue Capturing
+          </button>
+          <button type="button" onClick={onDone} className="w-full py-1 text-[12.5px] font-semibold text-muted-foreground">
+            Exit Capture
           </button>
         </div>
       </div>
