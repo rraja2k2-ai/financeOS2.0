@@ -7,7 +7,7 @@ import { createStageTimer } from "@/lib/perf-timer";
 
 export const maxDuration = 60;
 
-const MAX_PAGES = 8;
+const MAX_PAGES = 20;
 const MAX_PAGE_BYTES = 8 * 1024 * 1024;
 const ALLOWED_MIME = (type: string) => type.startsWith("image/") || type === "application/pdf";
 const ALLOWED_SOURCES: CaptureSourceKind[] = ["camera", "upload", "paste", "prompt"];

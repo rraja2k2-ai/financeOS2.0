@@ -57,6 +57,10 @@ const PROCESSING_POLL_MS = 2000;
 // ProcessingTimeline's own doc comment).
 const SIMULATED_STAGE_MS = 2500;
 
+// Multi-Page Receipt Capture — mirrors /api/inbox's own MAX_PAGES so the friendly
+// message shows before the user ever submits, not just as a server-side rejection.
+const MAX_RECEIPT_PAGES = 20;
+
 type ReceiptSource = "camera" | "upload" | "paste";
 
 type ReceiptPage = {
@@ -120,6 +124,10 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   /** A new receipt waiting for the user to confirm replacing the current one. */
   const [pendingReceipt, setPendingReceipt] = useState<Receipt | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** Replace Page (camera only, Multi-Page Receipt Capture) — the specific existing
+   *  page id the NEXT camera shot should overwrite in place, instead of appending a
+   *  new page. Cleared once consumed, or whenever the plain "Camera" action is used. */
+  const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
 
   // Submission lifecycle: submitting stays true from "Uploading…" all the way through
   // background processing — the modal doesn't hand off blind until the capture is
@@ -164,6 +172,10 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Camera lifecycle guard (Intermittent Camera Black Screen fix) — true while a native
+  // camera intent is open/settling, so a second tap can't fire a second overlapping
+  // .click() on the hidden input. See openCameraInput() below for the full rationale.
+  const cameraBusyRef = useRef(false);
 
   // Keep latest state in refs so the unmount-only cleanup below can release object URLs
   // without re-running (and revoking live URLs) on every state change.
@@ -177,7 +189,49 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
       releasePages(receiptRef.current?.pages ?? []);
       releasePages(pendingRef.current?.pages ?? []);
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      console.info("[capture:camera] component unmounted");
     };
+  }, []);
+
+  /**
+   * Intermittent Camera Black Screen fix — root cause: the "Camera" action is a plain
+   * `<input type="file" capture="environment">`; tapping it hands off to the OS's own
+   * native camera app (there is no getUserMedia/MediaStream/video element anywhere in
+   * this codebase — nothing here owns a stream to leak or fail to stop). Nothing in our
+   * JS renders the camera preview, so a lifecycle bug in a MediaStream can't be the
+   * cause. What OUR code COULD cause: firing `.click()` on the hidden input a second
+   * time while a previous native camera activity is still open/settling (a fast double
+   * tap, or Replace Page tapped right after Camera). Two overlapping camera intents is a
+   * known trigger for Android Chrome's camera HAL to hand the second intent a stale/black
+   * preview until it's manually closed and reopened — exactly the reported symptom. This
+   * guard makes that overlap impossible: a tap is ignored while a previous one hasn't
+   * settled yet, no other behavior changes.
+   */
+  function openCameraInput() {
+    if (cameraBusyRef.current) {
+      console.info("[capture:camera] open ignored — a previous camera intent is still settling");
+      return;
+    }
+    cameraBusyRef.current = true;
+    console.info("[capture:camera] camera requested");
+    cameraInputRef.current?.click();
+  }
+
+  // Fallback reset for the Cancel path — cancelling the native camera never fires the
+  // input's own change event, so nothing else would clear cameraBusyRef. Regaining
+  // window focus happens on BOTH capture and cancel (control returns to the tab either
+  // way); the short delay lets a genuine file selection's change event (which also
+  // clears the flag) land first on browsers where it arrives a tick after focus.
+  useEffect(() => {
+    function onFocus() {
+      if (!cameraBusyRef.current) return;
+      window.setTimeout(() => {
+        cameraBusyRef.current = false;
+        console.info("[capture:camera] camera closed (window refocused)");
+      }, 400);
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   // Closing is blocked only while actually queueing/processing (Fix 6.4A: the screen
@@ -241,25 +295,67 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
 
   async function handleCameraFiles(files: FileList | null) {
     const rawFile = files?.[0];
-    if (!rawFile) return;
+    if (!rawFile) {
+      console.info("[capture:camera] no file returned (cancelled)");
+      return;
+    }
+    console.info("[capture:camera] file received, compressing");
     const file = await withCompressionNotice(() => compressImageFile(rawFile));
+    console.info("[capture:camera] compression complete, page ready");
+
+    // Replace Page (camera only) — overwrite the targeted page in place rather than
+    // appending a new one. Takes priority over the normal append/install paths below.
+    if (replaceTargetId) {
+      const targetId = replaceTargetId;
+      setReplaceTargetId(null);
+      setReceipt((current) => {
+        if (!current) return current;
+        const idx = current.pages.findIndex((p) => p.id === targetId);
+        if (idx === -1) return current;
+        const oldPreviewUrl = current.pages[idx].previewUrl;
+        if (oldPreviewUrl) URL.revokeObjectURL(oldPreviewUrl);
+        const pages = [...current.pages];
+        pages[idx] = toPage(file);
+        return { ...current, pages };
+      });
+      return;
+    }
+
     // One receipt, many pages: keep appending pages while the camera is the source.
     if (receipt && receipt.source === "camera") {
+      if (receipt.pages.length >= MAX_RECEIPT_PAGES) {
+        setNotice(`A receipt can have at most ${MAX_RECEIPT_PAGES} pages.`);
+        return;
+      }
       setReceipt({ ...receipt, pages: [...receipt.pages, toPage(file)] });
     } else {
       installReceipt({ source: "camera", pages: [toPage(file)] });
     }
   }
 
-  async function handleUploadFile(files: FileList | null) {
-    const rawFile = files?.[0];
-    if (!rawFile) return;
-    if (!rawFile.type.startsWith("image/") && rawFile.type !== "application/pdf") {
-      setNotice("Upload one image or one PDF.");
+  /** Gallery upload (Scenario B) — accepts one or many images/PDFs from a single picker
+   *  action; a second Upload keeps appending pages, mirroring the camera's append
+   *  behavior, instead of always replacing (only a different SOURCE triggers the
+   *  replace-receipt confirmation, via installReceipt below). */
+  async function handleUploadFiles(fileList: FileList | null) {
+    const rawFiles = fileList ? Array.from(fileList) : [];
+    if (rawFiles.length === 0) return;
+    if (rawFiles.some((f) => !f.type.startsWith("image/") && f.type !== "application/pdf")) {
+      setNotice("Upload images or PDFs only.");
       return;
     }
-    const file = await withCompressionNotice(() => compressImageFile(rawFile));
-    installReceipt({ source: "upload", pages: [toPage(file)] });
+    const existingCount = receipt && receipt.source === "upload" ? receipt.pages.length : 0;
+    if (existingCount + rawFiles.length > MAX_RECEIPT_PAGES) {
+      setNotice(`A receipt can have at most ${MAX_RECEIPT_PAGES} pages.`);
+      return;
+    }
+    const compressed = await withCompressionNotice(() => Promise.all(rawFiles.map((f) => compressImageFile(f))));
+    const newPages = compressed.map(toPage);
+    if (receipt && receipt.source === "upload") {
+      setReceipt({ ...receipt, pages: [...receipt.pages, ...newPages] });
+    } else {
+      installReceipt({ source: "upload", pages: newPages });
+    }
   }
 
   async function handlePaste() {
@@ -309,6 +405,28 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     if (page?.previewUrl) URL.revokeObjectURL(page.previewUrl);
     const rest = receipt.pages.filter((p) => p.id !== id);
     setReceipt(rest.length > 0 ? { ...receipt, pages: rest } : null);
+  }
+
+  /** Move Up/Down (Multi-Page Receipt Capture) — plain swap-with-neighbor, no
+   *  drag-and-drop (simpler and more reliable on mobile). This reordering is exactly
+   *  what determines final page order sent to OCR/AI — pages are always submitted in
+   *  this array's order, never re-sorted by filename or upload time. */
+  function movePage(id: string, direction: -1 | 1) {
+    if (!receipt) return;
+    const idx = receipt.pages.findIndex((p) => p.id === id);
+    if (idx === -1) return;
+    const swapWith = idx + direction;
+    if (swapWith < 0 || swapWith >= receipt.pages.length) return;
+    const pages = [...receipt.pages];
+    [pages[idx], pages[swapWith]] = [pages[swapWith], pages[idx]];
+    setReceipt({ ...receipt, pages });
+  }
+
+  /** Replace Page (camera only) — arms replaceTargetId, then opens the camera; the next
+   *  shot overwrites this exact page in place (see handleCameraFiles above). */
+  function handleReplacePage(id: string) {
+    setReplaceTargetId(id);
+    openCameraInput();
   }
 
   const hasAttachments = (receipt?.pages.length ?? 0) > 0;
@@ -714,7 +832,13 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
 
             {/* Secondary actions */}
             <div className="mt-3 grid grid-cols-3 gap-2.5">
-              <ActionButton label="Camera" onClick={() => cameraInputRef.current?.click()}>
+              <ActionButton
+                label="Camera"
+                onClick={() => {
+                  setReplaceTargetId(null);
+                  openCameraInput();
+                }}
+              >
                 <path d="M4 8h3l2-3h6l2 3h3v12H4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
                 <circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" strokeWidth="2" />
               </ActionButton>
@@ -727,7 +851,9 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
               </ActionButton>
             </div>
 
-            {/* Hidden inputs. Camera: one receipt, multiple pages (one shot per click). */}
+            {/* Hidden inputs. Camera: one receipt, multiple pages (one shot per click, or a
+                targeted replace when replaceTargetId is armed). Upload: multiple selection
+                in one picker action (Scenario B — Gallery). */}
             <input
               ref={cameraInputRef}
               type="file"
@@ -735,6 +861,8 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
               capture="environment"
               className="hidden"
               onChange={(e) => {
+                cameraBusyRef.current = false;
+                console.info("[capture:camera] camera closed (file selected)");
                 handleCameraFiles(e.target.files);
                 e.target.value = "";
               }}
@@ -743,17 +871,22 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
               ref={uploadInputRef}
               type="file"
               accept="image/*,application/pdf"
+              multiple
               className="hidden"
               onChange={(e) => {
-                handleUploadFile(e.target.files);
+                handleUploadFiles(e.target.files);
                 e.target.value = "";
               }}
             />
 
-            {/* Attachments — rendered only once files exist */}
+            {/* Attachments — rendered only once files exist. Page order here IS submission
+                order (Multi-Page Receipt Capture) — Move Up/Down are plain array swaps, no
+                drag-and-drop, for reliable mobile use. */}
             {hasAttachments && receipt && (
               <section className="mt-5">
-                <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Receipt</p>
+                <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Receipt · {receipt.pages.length}/{MAX_RECEIPT_PAGES} page{receipt.pages.length === 1 ? "" : "s"}
+                </p>
                 <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
                   {receipt.pages.map((page, i) => (
                     <div key={page.id} className={cn("flex items-center gap-3 p-3", i > 0 && "border-t border-border")}>
@@ -769,16 +902,52 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
                           {page.isPdf ? "PDF" : "Image"} · {page.file.name}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => removePage(page.id)}
-                        aria-label={`Remove page ${i + 1}`}
-                        className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
-                          <path d="M18 6 6 18M6 6l12 12" />
-                        </svg>
-                      </button>
+                      <div className="flex flex-none items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => movePage(page.id, -1)}
+                          disabled={i === 0}
+                          aria-label={`Move page ${i + 1} up`}
+                          className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-muted-foreground disabled:opacity-30"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+                            <path d="M12 19V5M5 12l7-7 7 7" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => movePage(page.id, 1)}
+                          disabled={i === receipt.pages.length - 1}
+                          aria-label={`Move page ${i + 1} down`}
+                          className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-muted-foreground disabled:opacity-30"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+                            <path d="M12 5v14M5 12l7 7 7-7" />
+                          </svg>
+                        </button>
+                        {receipt.source === "camera" && !page.isPdf && (
+                          <button
+                            type="button"
+                            onClick={() => handleReplacePage(page.id)}
+                            aria-label={`Replace page ${i + 1}`}
+                            className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-muted-foreground"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
+                            </svg>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removePage(page.id)}
+                          aria-label={`Remove page ${i + 1}`}
+                          className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+                            <path d="M18 6 6 18M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
