@@ -9,6 +9,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { accountRepository, projectRepository } from "@/repositories";
+import * as transactionItemRepository from "@/repositories/transaction-item.repository";
 import * as transactionService from "@/services/transaction.service";
 import { convertToBaseCurrency, ExchangeRateNotFoundError } from "@/services/finance/exchange.service";
 import { DEFAULT_BASE_CURRENCY } from "@/domain/exchange-rate";
@@ -142,6 +143,22 @@ export async function updateReviewedTransaction(
   if (firstError) throw new SaveValidationError(firstError);
   if (itemIds.length !== reviewed.items.length) {
     throw new SaveValidationError("Line items changed unexpectedly — please reopen and try again.");
+  }
+
+  // Individual Line Item Deletion (Bug Fix) — `itemIds` is the SURVIVING subset the
+  // Review Screen sends after any in-screen deletions (ReviewScreen filters its own
+  // itemIds draft in lockstep with itemDrafts — see ReviewScreen.tsx's removeItem()), so
+  // the length check above holds again. Anything that existed on the transaction before
+  // this edit but isn't in that surviving list was deleted in this session; remove those
+  // rows here — the one place both the "before" (DB) and "after" (client) item sets are
+  // known — before updating whatever remains. transactionService.updateTransaction()
+  // itself is untouched: it was never responsible for deletion and still isn't, it only
+  // ever updates the ids it's given.
+  const existingItems = await transactionItemRepository.listByHeaderId(supabase, headerId);
+  const survivingIds = new Set(itemIds);
+  const removedItemIds = existingItems.filter((item) => !survivingIds.has(item.id)).map((item) => item.id);
+  for (const removedId of removedItemIds) {
+    await transactionItemRepository.remove(supabase, removedId);
   }
 
   const [accounts, projects] = await Promise.all([accountRepository.list(supabase), projectRepository.list(supabase)]);

@@ -201,6 +201,7 @@ export function AccountDetailView({ account, summary, recentTransactions, period
           masterData={masterData}
           capturedAt={editing.capturedAt}
           headerId={editing.headerId}
+          itemIds={editing.itemIds}
           onCancel={closeEditor}
           onSave={saveEditor}
           onDelete={deleteEditor}

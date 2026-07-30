@@ -573,6 +573,7 @@ export function ActivityView({
           masterData={masterData}
           capturedAt={editing.capturedAt}
           headerId={editing.headerId}
+          itemIds={editing.itemIds}
           onCancel={closeEditor}
           onSave={saveEditor}
           onDelete={deleteEditor}

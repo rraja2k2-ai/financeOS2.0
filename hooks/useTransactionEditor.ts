@@ -84,12 +84,16 @@ export function useTransactionEditor(options: UseTransactionEditorOptions = {}) 
   const closeEditor = useCallback(() => setEditing(null), []);
 
   const saveEditor = useCallback(
-    async (reviewed: ReviewedCapture) => {
+    // itemIds is the SURVIVING subset ReviewScreen hands back (Individual Line Item
+    // Deletion Bug Fix) — never editing.itemIds directly, which stays the original,
+    // pre-edit full list for as long as `editing` is set and would re-introduce the
+    // "Line items changed unexpectedly" bug for any save that deleted an item.
+    async (reviewed: ReviewedCapture, itemIds: string[]) => {
       if (!editing) return;
       const res = await fetch(`/api/transactions/${editing.headerId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reviewed, itemIds: editing.itemIds }),
+        body: JSON.stringify({ reviewed, itemIds }),
         signal: AbortSignal.timeout(60_000),
       }).catch(() => null);
 

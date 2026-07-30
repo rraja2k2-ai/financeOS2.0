@@ -551,13 +551,16 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
     }
   }
 
-  /** Saves Review edits back onto the SAME transaction (UPDATE, never a new one), then closes — same Edit/UPDATE path as Activity's own Edit. */
-  async function handleReviewSave(reviewed: ReviewedCapture) {
+  /** Saves Review edits back onto the SAME transaction (UPDATE, never a new one), then
+   *  closes — same Edit/UPDATE path as Activity's own Edit. itemIds is the SURVIVING
+   *  subset ReviewScreen hands back (Individual Line Item Deletion Bug Fix) — never
+   *  transactionData.itemIds directly, which stays the original, pre-edit full list. */
+  async function handleReviewSave(reviewed: ReviewedCapture, itemIds: string[]) {
     if (!savedHeaderId || !transactionData) return;
     const res = await fetch(`/api/transactions/${savedHeaderId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reviewed, itemIds: transactionData.itemIds }),
+      body: JSON.stringify({ reviewed, itemIds }),
       signal: AbortSignal.timeout(60_000),
     }).catch(() => null);
 
@@ -645,6 +648,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
         masterData={masterData}
         capturedAt={transactionData.capturedAt}
         headerId={savedHeaderId ?? undefined}
+        itemIds={transactionData.itemIds}
         onCancel={() => setReviewing(false)}
         onSave={handleReviewSave}
         onDelete={handleReviewDelete}

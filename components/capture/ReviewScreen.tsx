@@ -68,6 +68,7 @@ export function ReviewScreen({
   masterData,
   capturedAt,
   headerId,
+  itemIds,
   onCancel,
   onSave,
   onDelete,
@@ -82,15 +83,25 @@ export function ReviewScreen({
    *  receipt button below; omit only if a future caller genuinely has no saved
    *  transaction yet, in which case the button simply doesn't render. */
   headerId?: string;
+  /** transaction_items ids, in the SAME order as `result.items` (every entry point loads
+   *  both together — see TransactionForReview/EditingTransaction). Individual Line Item
+   *  Deletion (Bug Fix) filters this in lockstep with itemDrafts on every delete, so the
+   *  id handed back via onSave always matches what's actually still in itemDrafts —
+   *  never the stale, original-length list that caused "Line items changed
+   *  unexpectedly." */
+  itemIds: string[];
   onCancel: () => void;
-  /** Persist the reviewed data. Resolves on success (parent closes this screen), rejects with a friendly message on failure (this screen stays open). */
-  onSave: (reviewed: ReviewedCapture) => Promise<void>;
+  /** Persist the reviewed data, alongside the surviving item ids (same length/order as
+   *  `reviewed.items`, post-deletion). Resolves on success (parent closes this screen),
+   *  rejects with a friendly message on failure (this screen stays open). */
+  onSave: (reviewed: ReviewedCapture, itemIds: string[]) => Promise<void>;
   /** Deletes the transaction entirely. Resolves on success (parent closes this screen), rejects with a friendly message on failure (this screen stays open). */
   onDelete?: () => Promise<void>;
 }) {
   const [{ header, items }] = useState(() => draftsFromResult(result));
   const [headerDraft, setHeaderDraft] = useState<HeaderDraft>(header);
   const [itemDrafts, setItemDrafts] = useState<ItemDraft[]>(items);
+  const [itemIdDrafts, setItemIdDrafts] = useState<string[]>(itemIds);
   // Editable Tax and Discount (Transaction Workspace Final UX Polish) — form-friendly
   // strings, same convention as item amount/unitPrice; empty means "not specified" (saves
   // as null, matching the AI's own null when it found neither), typing "0" is a distinct,
@@ -187,6 +198,7 @@ export function ReviewScreen({
    *  adjusted here rather than left to silently point at the wrong row. */
   function removeItem(index: number) {
     setItemDrafts((list) => list.filter((_, i) => i !== index));
+    setItemIdDrafts((list) => list.filter((_, i) => i !== index));
     setExpandedItem((current) => {
       if (current === null || current === index) return null;
       return current > index ? current - 1 : current;
@@ -254,7 +266,7 @@ export function ReviewScreen({
         tax: taxDraft.trim() !== "" ? Number(taxDraft) : null,
         discount: discountDraft.trim() !== "" ? Number(discountDraft) : null,
       };
-      await onSave(reviewed);
+      await onSave(reviewed, itemIdDrafts);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Couldn't save the transaction. Please try again.");
       setSaving(false);
