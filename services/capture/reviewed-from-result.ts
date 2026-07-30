@@ -14,6 +14,16 @@ import { normalizeMerchantName, normalizeItemDescription } from "./text-normaliz
  *  missing merchant is defaulted; change this one constant to use a different placeholder. */
 export const UNKNOWN_VENDOR_PLACEHOLDER = "Unknown Vendor";
 
+/** Combines an item's numeric qty/unit/packSize into the single free-text form used
+ *  throughout the UI ("1 bag (5 kg)", "1.356 kg") — the ONE place this combination
+ *  happens (CLAUDE.md §8 "no duplicated logic"), reused by both this mapping's own
+ *  ItemDraft.qty below and Transaction Details' read-only item display. */
+export function formatItemQtyText(item: { qty: number | null; unit: string | null; packSize: string | null }): string {
+  return (
+    [item.qty !== null ? String(item.qty) : null, item.unit].filter(Boolean).join(" ") + (item.packSize ? ` (${item.packSize})` : "")
+  ).trim();
+}
+
 export function reviewedFromResult(result: CaptureReceiptResult): ReviewedCapture {
   const transactionType =
     result.header.transactionType && isTransactionType(result.header.transactionType) ? result.header.transactionType : TRANSACTION_TYPES.EXPENSE;
@@ -54,10 +64,7 @@ export function reviewedFromResult(result: CaptureReceiptResult): ReviewedCaptur
       // bottled product's size stays visible even though the Review Screen doesn't
       // render `unit`/`packSize` as their own fields yet (that's a future Receipt
       // Intelligence UI milestone, not this one).
-      qty: (
-        [item.qty !== null ? String(item.qty) : null, item.unit].filter(Boolean).join(" ") +
-        (item.packSize ? ` (${item.packSize})` : "")
-      ).trim(),
+      qty: formatItemQtyText(item),
       amount: item.lineAmount !== null ? String(item.lineAmount) : "",
       primaryCategory: item.primaryCategory ?? "",
       secondaryCategory: item.secondaryCategory ?? "",

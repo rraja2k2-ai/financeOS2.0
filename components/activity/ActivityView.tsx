@@ -12,6 +12,7 @@ import { TopCategoriesCard } from "@/components/shared/TopCategoriesCard";
 import { categoryActivityHref, resolvePeriodRange, startOfMonthIso, todayIso, type PeriodKey } from "@/lib/period";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
+import { TransactionDetailView } from "@/components/activity/TransactionDetailView";
 import { TransactionCard } from "@/components/activity/TransactionCard";
 import { fmt } from "@/components/activity/activity-format";
 import { FilteredLineItemList, filterLineItems, type FilteredLineItem } from "@/components/activity/FilteredLineItemList";
@@ -123,6 +124,25 @@ export function ActivityView({
     onError: setActionError,
   });
 
+  // Introduce Transaction Details (Read-Only) — "Browsing = Transaction Details,
+  // Editing = Transaction Workspace". Both screens read the SAME `editing` data
+  // useTransactionEditor already fetches (result/itemIds/capturedAt/masterData); this
+  // just toggles which of the two presentations is shown over it, so switching between
+  // them (Edit, or Back from Workspace) never refetches anything.
+  const [detailMode, setDetailMode] = useState<"view" | "edit" | null>(null);
+
+  /** Every normal browsing entry point (overflow menu, Search result, Category Filter
+   *  row) opens read-only Details first — never the Workspace directly. */
+  function openDetails(txnId: string) {
+    setDetailMode("view");
+    handleEdit(txnId);
+  }
+
+  function closeDetails() {
+    setDetailMode(null);
+    closeEditor();
+  }
+
   // Header overflow menu (UX refresh Phase C) + Receipt Viewer (Phase D). The menu
   // renders through a portal (Fix 5.3) so it's never clipped by the transaction card's
   // overflow-hidden — position is computed from the trigger button's own rect, not CSS.
@@ -177,6 +197,9 @@ export function ActivityView({
     if (!autoEdit || !highlightId) return;
     if (autoEditFiredRef.current === highlightId) return;
     autoEditFiredRef.current = highlightId;
+    // Post-Save Review goes straight to the Workspace, bypassing Details — this is a
+    // deliberate one-time correction pass right after a fresh capture, not browsing.
+    setDetailMode("edit");
     handleEdit(highlightId);
   }, [autoEdit, highlightId, handleEdit]);
 
@@ -403,10 +426,10 @@ export function ActivityView({
           items={matchedItems}
           emptyMessage={`No items match "${query}" in this period.`}
           query={q}
-          onOpenItem={handleEdit}
+          onOpenItem={openDetails}
         />
       ) : categoryFilter ? (
-        <FilteredLineItemList items={categoryFilteredItems} emptyMessage="No items match this category filter." onOpenItem={handleEdit} />
+        <FilteredLineItemList items={categoryFilteredItems} emptyMessage="No items match this category filter." onOpenItem={openDetails} />
       ) : byDate.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center text-[12.5px] text-muted-foreground">
           No transactions match this filter.
@@ -454,11 +477,11 @@ export function ActivityView({
               onClick={() => {
                 const id = menuAnchor.id;
                 closeMenu();
-                handleEdit(id);
+                openDetails(id);
               }}
               className="block w-full px-3.5 py-2.5 text-left text-[12.5px] font-semibold disabled:opacity-50"
             >
-              {editLoadingId === menuAnchor.id ? "Loading…" : "Edit"}
+              {editLoadingId === menuAnchor.id ? "Loading…" : "View Details"}
             </button>
             <button
               type="button"
@@ -488,18 +511,35 @@ export function ActivityView({
           document.body
         )}
 
-      {/* Edit — the SAME Review screen used by Capture, populated from the saved transaction.
-          Save UPDATEs it, never creates a new one. Delete (Transaction Workspace Foundation)
-          is a second way to remove a transaction, alongside this card's own quick-delete
-          (confirmingDeleteId/handleDelete) above — both end up calling the same DELETE API. */}
-      {editing && (
+      {/* Transaction Details (Read-Only) — the universal drill-down destination (Introduce
+          Transaction Details milestone): every browsing entry point above (overflow menu,
+          Search result, Category Filter row) opens this first. Its own "Edit" button
+          switches detailMode to "edit", rendering the Workspace below on the SAME already-
+          fetched `editing` data — no refetch, and Back from the Workspace returns here
+          (detailMode -> "view") rather than closing outright. */}
+      {editing && detailMode === "view" && (
+        <TransactionDetailView
+          result={editing.result}
+          capturedAt={editing.capturedAt}
+          headerId={editing.headerId}
+          onBack={closeDetails}
+          onEdit={() => setDetailMode("edit")}
+        />
+      )}
+
+      {/* Transaction Workspace (Edit) — the SAME Review screen used by Capture, populated
+          from the saved transaction. Save UPDATEs it, never creates a new one. Delete
+          (Transaction Workspace Foundation) is a second way to remove a transaction,
+          alongside this card's own quick-delete (confirmingDeleteId/handleDelete) above —
+          both end up calling the same DELETE API. */}
+      {editing && detailMode === "edit" && (
         <ReviewScreen
           result={editing.result}
           masterData={masterData}
           capturedAt={editing.capturedAt}
           headerId={editing.headerId}
           itemIds={editing.itemIds}
-          onCancel={closeEditor}
+          onCancel={() => setDetailMode("view")}
           onSave={saveEditor}
           onDelete={deleteEditor}
         />
