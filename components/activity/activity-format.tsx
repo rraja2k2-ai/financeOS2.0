@@ -16,6 +16,13 @@ export function formatFullDate(dateIso: string): string {
   return new Date(dateIso + "T00:00:00").toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** "30 Jul" — no year, no weekday. Unify Filtered Line Item Experience: each row in a
+ *  flat filtered list (Search, Category Filter, and future filters) carries its own
+ *  date instead of a shared date-group heading, so the date needs to be compact. */
+export function formatShortDate(dateIso: string): string {
+  return new Date(dateIso + "T00:00:00").toLocaleDateString("en-US", { day: "numeric", month: "short" });
+}
+
 /** "20 Jul 2026, 8:42 PM" — the ingestion timestamp, informational only (Fix 6.4.2). */
 export function formatCapturedAt(iso: string): string {
   const d = new Date(iso);
