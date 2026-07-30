@@ -172,6 +172,10 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Camera lifecycle guard (Intermittent Camera Black Screen fix) — true while a native
+  // camera intent is open/settling, so a second tap can't fire a second overlapping
+  // .click() on the hidden input. See openCameraInput() below for the full rationale.
+  const cameraBusyRef = useRef(false);
 
   // Keep latest state in refs so the unmount-only cleanup below can release object URLs
   // without re-running (and revoking live URLs) on every state change.
@@ -185,7 +189,49 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
       releasePages(receiptRef.current?.pages ?? []);
       releasePages(pendingRef.current?.pages ?? []);
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      console.info("[capture:camera] component unmounted");
     };
+  }, []);
+
+  /**
+   * Intermittent Camera Black Screen fix — root cause: the "Camera" action is a plain
+   * `<input type="file" capture="environment">`; tapping it hands off to the OS's own
+   * native camera app (there is no getUserMedia/MediaStream/video element anywhere in
+   * this codebase — nothing here owns a stream to leak or fail to stop). Nothing in our
+   * JS renders the camera preview, so a lifecycle bug in a MediaStream can't be the
+   * cause. What OUR code COULD cause: firing `.click()` on the hidden input a second
+   * time while a previous native camera activity is still open/settling (a fast double
+   * tap, or Replace Page tapped right after Camera). Two overlapping camera intents is a
+   * known trigger for Android Chrome's camera HAL to hand the second intent a stale/black
+   * preview until it's manually closed and reopened — exactly the reported symptom. This
+   * guard makes that overlap impossible: a tap is ignored while a previous one hasn't
+   * settled yet, no other behavior changes.
+   */
+  function openCameraInput() {
+    if (cameraBusyRef.current) {
+      console.info("[capture:camera] open ignored — a previous camera intent is still settling");
+      return;
+    }
+    cameraBusyRef.current = true;
+    console.info("[capture:camera] camera requested");
+    cameraInputRef.current?.click();
+  }
+
+  // Fallback reset for the Cancel path — cancelling the native camera never fires the
+  // input's own change event, so nothing else would clear cameraBusyRef. Regaining
+  // window focus happens on BOTH capture and cancel (control returns to the tab either
+  // way); the short delay lets a genuine file selection's change event (which also
+  // clears the flag) land first on browsers where it arrives a tick after focus.
+  useEffect(() => {
+    function onFocus() {
+      if (!cameraBusyRef.current) return;
+      window.setTimeout(() => {
+        cameraBusyRef.current = false;
+        console.info("[capture:camera] camera closed (window refocused)");
+      }, 400);
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   // Closing is blocked only while actually queueing/processing (Fix 6.4A: the screen
@@ -249,8 +295,13 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
 
   async function handleCameraFiles(files: FileList | null) {
     const rawFile = files?.[0];
-    if (!rawFile) return;
+    if (!rawFile) {
+      console.info("[capture:camera] no file returned (cancelled)");
+      return;
+    }
+    console.info("[capture:camera] file received, compressing");
     const file = await withCompressionNotice(() => compressImageFile(rawFile));
+    console.info("[capture:camera] compression complete, page ready");
 
     // Replace Page (camera only) — overwrite the targeted page in place rather than
     // appending a new one. Takes priority over the normal append/install paths below.
@@ -375,7 +426,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
    *  shot overwrites this exact page in place (see handleCameraFiles above). */
   function handleReplacePage(id: string) {
     setReplaceTargetId(id);
-    cameraInputRef.current?.click();
+    openCameraInput();
   }
 
   const hasAttachments = (receipt?.pages.length ?? 0) > 0;
@@ -785,7 +836,7 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
                 label="Camera"
                 onClick={() => {
                   setReplaceTargetId(null);
-                  cameraInputRef.current?.click();
+                  openCameraInput();
                 }}
               >
                 <path d="M4 8h3l2-3h6l2 3h3v12H4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
@@ -810,6 +861,8 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
               capture="environment"
               className="hidden"
               onChange={(e) => {
+                cameraBusyRef.current = false;
+                console.info("[capture:camera] camera closed (file selected)");
                 handleCameraFiles(e.target.files);
                 e.target.value = "";
               }}
