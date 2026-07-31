@@ -153,15 +153,15 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
               onClick={toggleKeepAttachment}
               disabled={keepBusyId === page.id}
               aria-pressed={!!keepById[page.id]}
-              aria-label="Keep attachment"
-              title="Keep Attachment — never deleted by Cleanup"
+              aria-label={keepById[page.id] ? "Keep Attachment — on, tap to turn off" : "Keep Attachment — off, tap to turn on"}
+              title="Never deleted by Manual Cleanup"
               className={cn(
-                "flex h-9 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-[12px] font-semibold text-white disabled:opacity-50",
-                keepById[page.id] && "bg-amber/20 text-amber"
+                "flex h-9 items-center gap-1.5 rounded-xl border px-3 text-[12px] font-semibold disabled:opacity-50",
+                keepById[page.id] ? "border-amber bg-amber/20 text-amber" : "border-white/15 bg-white/10 text-white"
               )}
             >
               <Star size={14} strokeWidth={2.2} fill={keepById[page.id] ? "currentColor" : "none"} />
-              {keepById[page.id] ? "Kept" : "Keep"}
+              Keep Attachment
             </button>
           )}
           <button
