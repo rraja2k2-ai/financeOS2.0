@@ -45,6 +45,15 @@ export type DashboardViewProps = {
   accountNameById: Record<string, string>;
 };
 
+/** Net Cash tabs (Dashboard v1.5) — keys match NetCashPosition's own bucket fields
+ *  exactly, so selecting a tab is a direct property lookup, never a re-derivation. */
+const NET_CASH_TABS = [
+  { key: "cash", label: "Cash" },
+  { key: "loans", label: "Loans" },
+  { key: "creditCards", label: "Credit Cards" },
+] as const;
+type NetCashTabKey = (typeof NET_CASH_TABS)[number]["key"];
+
 function fmt(n: number, decimals = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
@@ -61,6 +70,9 @@ export function DashboardView({
 }: DashboardViewProps) {
   const router = useRouter();
   const [hidden, setHidden] = useState(false);
+  // Net Cash tab (Dashboard v1.5) — all three buckets are already computed server-side
+  // (net-cash.service.ts); switching tabs is pure client state, never a refetch.
+  const [netCashTab, setNetCashTab] = useState<NetCashTabKey>("cash");
 
   // Local copy so a saved Edit can patch just the one affected card (§4/§8 — no
   // router.refresh(), no re-querying the rest of the Dashboard's data).
@@ -161,10 +173,10 @@ export function DashboardView({
         <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Today&apos;s pulse</p>
 
         <div className="rounded-[var(--radius-lg)] border border-border bg-card p-[18px]">
-          <p className="text-[12.5px] font-semibold text-muted-foreground">Net cash position</p>
+          <p className="text-[12.5px] font-semibold text-muted-foreground">Net cash</p>
           <p className={cn("mt-1.5 font-mono text-[34px] font-semibold tracking-tight tabular-nums", hidden && "blur-md select-none")}>
             <span className="mr-1.5 font-sans text-[16px] font-semibold text-muted-foreground">SGD</span>
-            {fmt(netCash.sgdTotal)}
+            {fmt(netCash.overallNetCash)}
           </p>
           {netCash.unconvertedCurrencies.length > 0 && (
             <p className="mt-1 text-[11px] text-amber">
@@ -172,20 +184,56 @@ export function DashboardView({
             </p>
           )}
 
-          <div className={cn("mt-4 flex gap-2 overflow-x-auto", hidden && "blur-sm select-none")}>
-            {netCash.byCurrency.map((c) => (
-              <div key={c.currency} className="flex flex-none items-baseline gap-1.5 whitespace-nowrap rounded-full bg-secondary px-3 py-1.5 text-[12.5px] font-semibold text-muted-foreground">
-                {c.currency}
-                <b className="font-mono tabular-nums font-semibold text-foreground">{fmt(c.nativeAmount)}</b>
-              </div>
-            ))}
-            {netCash.loansOut.map((l) => (
-              <div key={`loan-${l.currency}`} className="flex flex-none items-baseline gap-1.5 whitespace-nowrap rounded-full bg-amber-soft px-3 py-1.5 text-[12.5px] font-semibold text-amber">
-                Lent out
-                <b className="font-mono tabular-nums font-semibold">{l.currency} {fmt(l.nativeAmount)}</b>
-              </div>
+          {/* Tab control — same compact segmented style as the SGD/INR toggle below,
+              extended to three options. Every tab's data is already in `netCash`
+              (Dashboard v1.5) — switching is a plain state change, no request. */}
+          <div className="mt-4 grid grid-cols-3 gap-1 rounded-[var(--radius-md)] bg-secondary p-1">
+            {NET_CASH_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setNetCashTab(tab.key)}
+                aria-pressed={netCashTab === tab.key}
+                className={cn(
+                  "rounded-[calc(var(--radius-md)-4px)] py-1.5 text-[11.5px] font-semibold",
+                  netCashTab === tab.key ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+                )}
+              >
+                {tab.label}
+              </button>
             ))}
           </div>
+
+          {(() => {
+            const bucket = netCash[netCashTab];
+            const isLoans = netCashTab === "loans";
+            return (
+              <div className="mt-3">
+                <p className={cn("font-mono text-[18px] font-semibold tabular-nums", hidden && "blur-sm select-none")}>SGD {fmt(bucket.total)}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {bucket.accountCount} account{bucket.accountCount === 1 ? "" : "s"}
+                </p>
+                <div className={cn("mt-2.5 flex gap-2 overflow-x-auto", hidden && "blur-sm select-none")}>
+                  {bucket.byCurrency.length === 0 ? (
+                    <p className="text-[11.5px] text-muted-foreground">No accounts in this category.</p>
+                  ) : (
+                    bucket.byCurrency.map((c) => (
+                      <div
+                        key={c.currency}
+                        className={cn(
+                          "flex flex-none items-baseline gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[12.5px] font-semibold",
+                          isLoans ? "bg-amber-soft text-amber" : "bg-secondary text-muted-foreground"
+                        )}
+                      >
+                        {c.currency}
+                        <b className="font-mono tabular-nums font-semibold text-foreground">{fmt(c.nativeAmount)}</b>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Estimated Monthly Savings (Dashboard v1.4) — Income minus Expense this month;
