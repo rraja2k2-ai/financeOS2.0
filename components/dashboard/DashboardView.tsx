@@ -24,6 +24,9 @@ export type DashboardViewProps = {
   budget: {
     budgetedSgd: number;
     spentSgd: number;
+    /** Dashboard v1.4 review, Fix 3 — computed server-side (dashboard.service.ts's
+     *  computeBudgetRemainingSgd), never in this presentation component. */
+    remainingSgd: number;
     isCarriedForward: boolean;
     sourceMonth: string | null;
   } | null;
@@ -212,20 +215,22 @@ export function DashboardView({
               </div>
             </div>
 
-            {/* Budget Remaining (Dashboard v1.4) */}
+            {/* Budget Remaining (Dashboard v1.4) — value computed server-side
+                (dashboard.service.ts's computeBudgetRemainingSgd); this component only
+                displays it. */}
             <div className={cn("mt-3 flex items-center justify-between border-t border-border pt-3 text-[12px]", hidden && "blur-sm select-none")}>
               <span className="text-muted-foreground">Budget remaining</span>
-              <span className="font-mono font-semibold tabular-nums">SGD {fmt(Math.max(0, budget.budgetedSgd - budget.spentSgd), 0)}</span>
+              <span className="font-mono font-semibold tabular-nums">SGD {fmt(budget.remainingSgd, 0)}</span>
             </div>
 
             {/* Budget Pace (Dashboard v1.4) — transparent, mathematically verifiable:
-                expected % assumes even spend across the month; actual % is the real,
-                uncapped figure. No traffic-light status, just the two numbers and a
-                plain comparison sentence. */}
+                expected % assumes even spend across the month. No traffic-light status,
+                just the number and a plain comparison sentence. Actual % is deliberately
+                not repeated here — the ring above already shows it. */}
             {budgetPace && (
               <div className={cn("mt-2 text-[11.5px] leading-relaxed", hidden && "blur-sm select-none")}>
                 <p className="text-muted-foreground">
-                  Day {budgetPace.dayOfMonth} of {budgetPace.daysInMonth} · Expected {budgetPace.expectedPct}% · Actual {budgetPace.actualPct}%
+                  Day {budgetPace.dayOfMonth} of {budgetPace.daysInMonth} · Expected {budgetPace.expectedPct}%
                 </p>
                 <p className="mt-0.5 font-medium text-foreground">
                   {budgetPace.comparison === "above"

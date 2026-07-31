@@ -4,7 +4,7 @@ import { getNetCashPosition } from "@/services/finance/net-cash.service";
 import { getCategorySpend } from "@/services/finance/category-spend.service";
 import { getMonthBudget, sumExpenseBudget } from "@/services/finance/budget.service";
 import { getRecentTransactions } from "@/services/finance/activity.service";
-import { getMonthlyIncomeSgd, computeBudgetPace, buildAttentionItems } from "@/services/finance/dashboard.service";
+import { getMonthlyIncomeAndExpense, computeBudgetPace, computeBudgetRemainingSgd, buildAttentionItems, round2 } from "@/services/finance/dashboard.service";
 import { listInboxItems } from "@/services/capture/inbox.service";
 import { DashboardView } from "@/components/dashboard/DashboardView";
 import { buildAccountNameMap } from "@/components/activity/activity-format";
@@ -23,26 +23,34 @@ export default async function DashboardPage() {
   const supabase = await createServerSupabaseClient();
   const { start, end, label } = currentMonthRange();
 
-  const [accounts, projects, categorySpend, recentTransactions, inboxItems, monthlyIncomeSgd] = await Promise.all([
+  const [accounts, projects, categorySpend, recentTransactions, inboxItems, monthlyIncomeAndExpense] = await Promise.all([
     accountRepository.list(supabase),
     projectRepository.list(supabase),
+    // Still needed separately: the Attention section's "highest contributing category"
+    // requires the item-level breakdown only category-spend.service provides — headers
+    // alone (below) can't produce it. Not a leftover duplicate of that call: this fetch
+    // and monthlyIncomeAndExpense now serve two genuinely different needs (category
+    // breakdown vs. household income/expense totals) instead of both re-deriving the
+    // same total independently the way the pre-fix version did.
     getCategorySpend(supabase, start, end),
     getRecentTransactions(supabase, 7),
     listInboxItems(supabase),
-    getMonthlyIncomeSgd(supabase, start, end),
+    getMonthlyIncomeAndExpense(supabase, start, end),
   ]);
 
   const netCash = await getNetCashPosition(supabase, accounts);
-  const monthlyExpenseSgd = categorySpend.reduce((sum, c) => sum + c.sgdAmount, 0);
 
   const genericProject = projects.find((p) => p.project_name === "Generic");
-  let budget: { budgetedSgd: number; spentSgd: number; isCarriedForward: boolean; sourceMonth: string | null } | null = null;
+  let budget: { budgetedSgd: number; spentSgd: number; remainingSgd: number; isCarriedForward: boolean; sourceMonth: string | null } | null = null;
 
   if (genericProject) {
     const monthBudget = await getMonthBudget(supabase, genericProject.id, start);
+    const budgetedSgd = sumExpenseBudget(monthBudget);
+    const spentSgd = monthlyIncomeAndExpense.expenseSgd;
     budget = {
-      budgetedSgd: sumExpenseBudget(monthBudget),
-      spentSgd: monthlyExpenseSgd,
+      budgetedSgd,
+      spentSgd,
+      remainingSgd: computeBudgetRemainingSgd(budgetedSgd, spentSgd),
       isCarriedForward: monthBudget.isCarriedForward,
       sourceMonth: monthBudget.sourceMonth,
     };
@@ -62,15 +70,11 @@ export default async function DashboardPage() {
       monthLabel={label}
       netCash={netCash}
       budget={budget}
-      estimatedMonthlySavings={round2(monthlyIncomeSgd - monthlyExpenseSgd)}
+      estimatedMonthlySavings={round2(monthlyIncomeAndExpense.incomeSgd - monthlyIncomeAndExpense.expenseSgd)}
       budgetPace={budgetPace}
       attentionItems={attentionItems}
       recentTransactions={recentTransactions}
       accountNameById={buildAccountNameMap(accounts)}
     />
   );
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
