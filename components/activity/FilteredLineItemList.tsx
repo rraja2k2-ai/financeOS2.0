@@ -84,30 +84,41 @@ export function FilteredLineItemList({
         </span>
       </div>
       <div className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-card">
-        {items.map((item, i) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onOpenItem(item.txnId)}
-            className={cn("flex w-full items-start gap-3 px-3.5 py-3 text-left", i > 0 && "border-t border-border")}
-          >
-            <div className="min-w-0 flex-1">
-              <p className="mb-1 text-[10.5px] font-semibold text-muted-foreground">{formatShortDate(item.transactionDate)}</p>
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="truncate text-[13.5px] font-semibold text-foreground">{q ? highlight(item.description, q) : (item.description ?? "Untitled item")}</p>
-                <span className="flex-none font-mono text-[13.5px] font-bold tabular-nums">
-                  {item.currency} {fmt(item.itemTotal)}
-                </span>
+        {items.map((item, i) => {
+          const qtyText = formatQty(item.qty);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onOpenItem(item.txnId)}
+              className={cn("flex w-full items-start gap-3 px-3.5 py-3 text-left", i > 0 && "border-t border-border")}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="mb-1 text-[10.5px] font-semibold text-muted-foreground">{formatShortDate(item.transactionDate)}</p>
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="truncate text-[13.5px] font-semibold text-foreground">{q ? highlight(item.description, q) : (item.description ?? "Untitled item")}</p>
+                  <span className="flex-none font-mono text-[13.5px] font-bold tabular-nums">
+                    {item.currency} {fmt(item.itemTotal)}
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{q ? highlight(item.merchant, q) : (item.merchant ?? "—")}</p>
+                {/* Quantity (navy — a neutral accent distinct from the emerald search
+                    highlight/primary color) | Category (secondary gray), separated by a
+                    pipe rather than a bullet for clearer visual separation. */}
+                <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+                  {qtyText && (
+                    <>
+                      <span className="font-medium text-navy">{qtyText}</span>
+                      {" | "}
+                    </>
+                  )}
+                  {q ? highlight(categoryPath(item.primaryCategory, item.secondaryCategory), q) : categoryPath(item.primaryCategory, item.secondaryCategory)}
+                </p>
               </div>
-              <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{q ? highlight(item.merchant, q) : (item.merchant ?? "—")}</p>
-              <p className="mt-0.5 text-[10.5px] text-muted-foreground">
-                {formatQty(item.qty) && <span className="font-medium text-primary">{formatQty(item.qty)} • </span>}
-                {q ? highlight(categoryPath(item.primaryCategory, item.secondaryCategory), q) : categoryPath(item.primaryCategory, item.secondaryCategory)}
-              </p>
-            </div>
-            <ChevronRight size={16} strokeWidth={2.3} className="mt-1 flex-none text-muted-foreground" aria-hidden="true" />
-          </button>
-        ))}
+              <ChevronRight size={16} strokeWidth={2.3} className="mt-1 flex-none text-muted-foreground" aria-hidden="true" />
+            </button>
+          );
+        })}
       </div>
     </>
   );
