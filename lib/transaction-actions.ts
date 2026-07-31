@@ -51,12 +51,16 @@ export async function setKeepAttachmentRequest(attachmentId: string, keepAttachm
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ keepAttachment }),
     });
+    const body = (await res.json().catch(() => null)) as { error?: string; updated?: boolean } | null;
+    // TEMPORARY diagnostic logging (Keep Attachment flicker investigation) — remove once
+    // the root cause is confirmed in the browser console against the live deployment.
+    console.log("[setKeepAttachmentRequest]", { attachmentId, keepAttachment, status: res.status, ok: res.ok, body });
     if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { error?: string } | null;
-      return { ok: false, error: body?.error ?? "Couldn't update this attachment. Try again." };
+      return { ok: false, error: body?.error ? `${body.error} (HTTP ${res.status})` : `Couldn't update this attachment. Try again. (HTTP ${res.status})` };
     }
     return { ok: true };
-  } catch {
+  } catch (err) {
+    console.log("[setKeepAttachmentRequest] network/throw error:", err);
     return { ok: false, error: "Couldn't reach the server. Try again." };
   }
 }

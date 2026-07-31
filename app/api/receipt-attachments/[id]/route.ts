@@ -22,10 +22,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   try {
     const supabase = await createServerSupabaseClient();
-    await receiptAttachmentRepository.update(supabase, id, { keep_attachment: body.keepAttachment });
+    const updated = await receiptAttachmentRepository.update(supabase, id, { keep_attachment: body.keepAttachment });
+    // TEMPORARY diagnostic logging (Keep Attachment flicker investigation) — remove once
+    // the root cause is confirmed against the live deployment (check Vercel function logs).
+    console.log("[receipt-attachments/:id] PATCH ok", { id, requested: body.keepAttachment, rowReturned: updated?.keep_attachment });
     return NextResponse.json({ updated: true });
   } catch (err) {
-    console.error("[receipt-attachments/:id] PATCH failed:", err);
+    // Logs the RAW error (not just a generic message) — if this is still an RLS policy
+    // gap, Postgres/PostgREST's own message ("new row violates row-level security
+    // policy...") will appear here in Vercel's function logs.
+    console.error("[receipt-attachments/:id] PATCH failed:", { id, requested: body.keepAttachment, err });
     return NextResponse.json({ error: "Couldn't update this attachment. Try again." }, { status: 500 });
   }
 }

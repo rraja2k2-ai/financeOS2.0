@@ -62,16 +62,26 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
   async function toggleKeepAttachment() {
     if (!page || keepBusyId) return;
     const next = !keepById[page.id];
+    // TEMPORARY diagnostic logging (Keep Attachment flicker investigation) — remove once
+    // the root cause is confirmed in the browser console against the live deployment.
+    console.log("[toggleKeepAttachment] before click", { attachmentId: page.id, current: keepById[page.id], next });
     setKeepById((prev) => ({ ...prev, [page.id]: next }));
+    console.log("[toggleKeepAttachment] optimistic state set", { attachmentId: page.id, optimistic: next });
     setKeepBusyId(page.id);
     const result = await setKeepAttachmentRequest(page.id, next);
+    console.log("[toggleKeepAttachment] PATCH settled", { attachmentId: page.id, result });
     if (result.ok) {
       // Confirms the visual state reflects what actually persisted — the toast only
       // fires once the API call has succeeded, never on the optimistic flip alone.
       setToast(next ? "Receipt protected from cleanup." : "Receipt will be eligible for cleanup.");
+      console.log("[toggleKeepAttachment] kept optimistic state (PATCH succeeded)", { attachmentId: page.id, final: next });
     } else {
-      // Revert on failure — the server state is the source of truth.
+      // Revert on failure — the server state is the source of truth. Now also surfaced
+      // to the user (previously silent, which is what made a real failure look like an
+      // unexplained "flicker" rather than a visible, understandable error).
       setKeepById((prev) => ({ ...prev, [page.id]: !next }));
+      setToast(result.error);
+      console.log("[toggleKeepAttachment] REVERTED — PATCH failed", { attachmentId: page.id, revertedTo: !next, error: result.error });
     }
     setKeepBusyId(null);
   }
