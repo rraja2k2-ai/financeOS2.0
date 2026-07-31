@@ -32,18 +32,22 @@ export function formatCapturedAt(iso: string): string {
 }
 
 /**
- * Qty is stored free text (Fix 5.2). Weight/volume/etc. units are shown exactly as
- * extracted — never reformatted. Only when no unit is present (a bare piece count, e.g.
- * from a legacy fixed-precision NUMERIC cast like "1.000") do we trim insignificant
- * trailing zeros and apply "PC", FinanceOS's standard default unit of measure. This is
- * presentation-only — the stored qty text is never rewritten.
+ * Qty is stored free text (Fix 5.2). The unit's own text is shown exactly as
+ * extracted — never reformatted, reinterpreted, or re-derived. Only the WHITESPACE
+ * between the number and the unit is standardized (Activity Search Results Final
+ * Polish) to exactly one space, so "0.362kg" and "0.362 kg" both display as
+ * "0.362 kg" — the stored value itself is never rewritten, only this display copy.
+ * When no unit is present (a bare piece count, e.g. from a legacy fixed-precision
+ * NUMERIC cast like "1.000") we trim insignificant trailing zeros and apply "PC",
+ * FinanceOS's standard default unit of measure. This is presentation-only.
  */
 export function formatQty(qty: string): string {
   const trimmed = qty.trim();
   const match = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(.*)$/);
   if (!match) return trimmed;
-  const [, numPart, unitPart] = match;
-  if (unitPart.trim()) return trimmed;
+  const [, numPart, rawUnitPart] = match;
+  const unitPart = rawUnitPart.trim();
+  if (unitPart) return `${numPart} ${unitPart}`;
   const cleanedNum = numPart.includes(".") ? numPart.replace(/0+$/, "").replace(/\.$/, "") || "0" : numPart;
   return `${cleanedNum} PC`;
 }

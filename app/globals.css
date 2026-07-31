@@ -47,6 +47,7 @@
   --color-amber-soft: var(--amber-soft);
   --color-danger-soft: var(--danger-soft);
   --color-accent-soft: var(--accent-soft);
+  --color-navy: var(--navy);
 }
 
 :root {
@@ -81,6 +82,10 @@
   --amber-soft: #f7e7cb;
   --danger-soft: #fbe1e4;
   --accent-soft: #dcf3e8;
+  /* Activity Search Results Final Polish — quantity's own neutral accent, distinct
+     from --primary/--accent (both emerald, same as the search-match highlight) so a
+     quantity value never visually competes with a highlighted search match. */
+  --navy: #1e4d8c;
 }
 
 .dark {
@@ -111,6 +116,7 @@
   --amber-soft: #2e2412;
   --danger-soft: #301419;
   --accent-soft: #132a22;
+  --navy: #6ea8ff;
 }
 
 @layer base {
