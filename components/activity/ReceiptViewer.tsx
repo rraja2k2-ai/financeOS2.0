@@ -47,7 +47,17 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
     Object.fromEntries(pages.map((p) => [p.id, p.keepAttachment]))
   );
   const [keepBusyId, setKeepBusyId] = useState<string | null>(null);
+  // Same toast pattern already used by ActivityView/DashboardView (fixed pill,
+  // auto-clears after 3s) — reused here rather than introducing a new one, since the
+  // toggle itself lives inside this shared viewer, not any one caller.
+  const [toast, setToast] = useState<string | null>(null);
   const page = pages[index];
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   async function toggleKeepAttachment() {
     if (!page || keepBusyId) return;
@@ -55,7 +65,11 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
     setKeepById((prev) => ({ ...prev, [page.id]: next }));
     setKeepBusyId(page.id);
     const result = await setKeepAttachmentRequest(page.id, next);
-    if (!result.ok) {
+    if (result.ok) {
+      // Confirms the visual state reflects what actually persisted — the toast only
+      // fires once the API call has succeeded, never on the optimistic flip alone.
+      setToast(next ? "Receipt protected from cleanup." : "Receipt will be eligible for cleanup.");
+    } else {
       // Revert on failure — the server state is the source of truth.
       setKeepById((prev) => ({ ...prev, [page.id]: !next }));
     }
@@ -156,12 +170,12 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
               aria-label={keepById[page.id] ? "Keep Attachment — on, tap to turn off" : "Keep Attachment — off, tap to turn on"}
               title="Never deleted by Manual Cleanup"
               className={cn(
-                "flex h-9 items-center gap-1.5 rounded-xl border px-3 text-[12px] font-semibold disabled:opacity-50",
-                keepById[page.id] ? "border-amber bg-amber/20 text-amber" : "border-white/15 bg-white/10 text-white"
+                "flex h-9 items-center gap-1.5 rounded-xl border px-3 text-[12px] font-semibold transition-colors disabled:opacity-50",
+                keepById[page.id] ? "border-amber bg-amber/25 text-amber" : "border-white/15 bg-white/10 text-white/80"
               )}
             >
               <Star size={14} strokeWidth={2.2} fill={keepById[page.id] ? "currentColor" : "none"} />
-              Keep Attachment
+              {keepById[page.id] ? "Kept" : "Keep Attachment"}
             </button>
           )}
           <button
@@ -221,6 +235,16 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
           >
             Next
           </button>
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed inset-x-0 z-[80] mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2.5 text-[13px] font-semibold text-background shadow-lg"
+          style={{ bottom: "calc(96px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          {toast}
         </div>
       )}
     </div>
