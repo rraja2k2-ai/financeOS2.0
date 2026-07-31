@@ -8,6 +8,7 @@ import { ArrowLeftRight, Receipt as ReceiptTypeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NetCashPosition } from "@/services/finance/net-cash.service";
 import type { RecentTransaction } from "@/services/finance/activity.service";
+import type { AttentionItem, BudgetPace } from "@/services/finance/dashboard.service";
 import { categoryIcon } from "@/constants/category-icons";
 import { TRANSACTION_TYPES } from "@/constants/transaction-types";
 import { sourceAccountSubline, subtitleCategory, transactionTitle } from "@/components/activity/activity-format";
@@ -23,9 +24,22 @@ export type DashboardViewProps = {
   budget: {
     budgetedSgd: number;
     spentSgd: number;
+    /** Dashboard v1.4 review, Fix 3 — computed server-side (dashboard.service.ts's
+     *  computeBudgetRemainingSgd), never in this presentation component. */
+    remainingSgd: number;
     isCarriedForward: boolean;
     sourceMonth: string | null;
   } | null;
+  /** Income minus Expense for the current month (Dashboard v1.4 Decision Dashboard) —
+   *  already computed server-side (services/finance/dashboard.service.ts). */
+  estimatedMonthlySavings: number;
+  /** "Day 15 of 30, expected 50%, actual 42%" — null when there's no budget to pace
+   *  against (no Generic project configured), same condition the budget ring already
+   *  guards on. */
+  budgetPace: BudgetPace | null;
+  /** Conditional Attention section (Dashboard v1.4) — empty means nothing needs
+   *  attention; the section is hidden entirely in that case, never an empty-state message. */
+  attentionItems: AttentionItem[];
   recentTransactions: RecentTransaction[];
   /** id -> account_name (Transaction UX Final Polish) — see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
@@ -35,7 +49,16 @@ function fmt(n: number, decimals = 2) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-export function DashboardView({ monthLabel, netCash, budget, recentTransactions: initialRecentTransactions, accountNameById }: DashboardViewProps) {
+export function DashboardView({
+  monthLabel,
+  netCash,
+  budget,
+  estimatedMonthlySavings,
+  budgetPace,
+  attentionItems,
+  recentTransactions: initialRecentTransactions,
+  accountNameById,
+}: DashboardViewProps) {
   const router = useRouter();
   const [hidden, setHidden] = useState(false);
 
@@ -165,6 +188,21 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
           </div>
         </div>
 
+        {/* Estimated Monthly Savings (Dashboard v1.4) — Income minus Expense this month;
+            shown regardless of whether a budget is configured, since it doesn't depend
+            on one. */}
+        <div
+          className={cn(
+            "mt-2.5 flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-card px-3.5 py-3",
+            hidden && "blur-sm select-none"
+          )}
+        >
+          <span className="text-[12px] font-semibold text-muted-foreground">Estimated monthly savings</span>
+          <span className={cn("font-mono text-[14px] font-bold tabular-nums", estimatedMonthlySavings < 0 && "text-destructive")}>
+            {estimatedMonthlySavings < 0 ? "−" : ""}SGD {fmt(Math.abs(estimatedMonthlySavings), 0)}
+          </span>
+        </div>
+
         {budget && (
           <div className="mt-2.5 rounded-[var(--radius-md)] border border-border bg-card p-3.5">
             <div className="flex items-center gap-3">
@@ -176,6 +214,34 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
                 </p>
               </div>
             </div>
+
+            {/* Budget Remaining (Dashboard v1.4) — value computed server-side
+                (dashboard.service.ts's computeBudgetRemainingSgd); this component only
+                displays it. */}
+            <div className={cn("mt-3 flex items-center justify-between border-t border-border pt-3 text-[12px]", hidden && "blur-sm select-none")}>
+              <span className="text-muted-foreground">Budget remaining</span>
+              <span className="font-mono font-semibold tabular-nums">SGD {fmt(budget.remainingSgd, 0)}</span>
+            </div>
+
+            {/* Budget Pace (Dashboard v1.4) — transparent, mathematically verifiable:
+                expected % assumes even spend across the month. No traffic-light status,
+                just the number and a plain comparison sentence. Actual % is deliberately
+                not repeated here — the ring above already shows it. */}
+            {budgetPace && (
+              <div className={cn("mt-2 text-[11.5px] leading-relaxed", hidden && "blur-sm select-none")}>
+                <p className="text-muted-foreground">
+                  Day {budgetPace.dayOfMonth} of {budgetPace.daysInMonth} · Expected {budgetPace.expectedPct}%
+                </p>
+                <p className="mt-0.5 font-medium text-foreground">
+                  {budgetPace.comparison === "above"
+                    ? "You're spending above your planned monthly pace."
+                    : budgetPace.comparison === "below"
+                      ? "You're spending below your planned monthly pace."
+                      : "You're spending right on your planned monthly pace."}
+                </p>
+              </div>
+            )}
+
             {budget.isCarriedForward && (
               <p className="mt-2 text-[11px] text-amber">
                 Showing {budget.sourceMonth}&apos;s budget — {monthLabel} hasn&apos;t been started yet.
@@ -184,6 +250,28 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
           </div>
         )}
       </section>
+
+      {/* Attention (Dashboard v1.4) — conditional: hidden entirely when nothing needs
+          attention, never an empty-state message. Every item deep-links to the exact
+          place to investigate (Capture Inbox, Exchange Rate Settings, or Activity
+          filtered to the contributing category), reusing navigation that already exists —
+          Dashboard decides, Activity investigates. */}
+      {attentionItems.length > 0 && (
+        <section className="mb-6">
+          <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Needs your attention</p>
+          <div className="flex flex-col gap-2">
+            {attentionItems.map((item) => (
+              <Link
+                key={item.id}
+                href={item.href}
+                className="block rounded-[var(--radius-lg)] border border-amber/40 bg-amber-soft px-3.5 py-3 text-[12.5px] leading-relaxed text-foreground"
+              >
+                {item.message}
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Recent Transactions */}
       <section className="mb-6">
@@ -297,11 +385,6 @@ export function DashboardView({ monthLabel, netCash, budget, recentTransactions:
           </div>
         )}
       </section>
-
-      <p className="mb-4 rounded-[var(--radius-md)] border border-dashed border-border p-3.5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
-        &quot;Needs You&quot; and &quot;The Story&quot; aren&apos;t shown yet — Needs You is genuinely empty (no pending
-        captures), and Story insights need month-over-month data this partial month doesn&apos;t have yet.
-      </p>
 
       {actionError && <p className="mb-4 text-[12px] font-semibold text-destructive">{actionError}</p>}
 
