@@ -11,5 +11,7 @@ export type ReceiptAttachment = {
   storage_path: string | null;
   /** 1-based page number within the receipt (a receipt can have multiple pages). */
   page_no: number | null;
+  /** Attachment Management MVP — user flag exempting this attachment from Manual Cleanup. */
+  keep_attachment: boolean;
   created_at: string;
 };

@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Star } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { setKeepAttachmentRequest } from "@/lib/transaction-actions";
 
 export type ReceiptViewerPage = {
+  id: string;
   url: string;
   mimeType: string;
   pageNo: number;
+  /** Attachment Management MVP, Feature 2 — "Keep Attachment" starts OFF; toggled here,
+   *  the one place a user looks at a receipt (Feature 4's single source of truth). */
+  keepAttachment: boolean;
 };
 
 const MIN_SCALE = 1;
@@ -34,7 +41,26 @@ function touchDistance(touches: TouchList | React.TouchList): number {
  */
 export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; onClose: () => void }) {
   const [index, setIndex] = useState(0);
+  // Local copy so toggling "Keep Attachment" reflects immediately without waiting on a
+  // caller refetch — the PATCH call itself is what actually persists it.
+  const [keepById, setKeepById] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(pages.map((p) => [p.id, p.keepAttachment]))
+  );
+  const [keepBusyId, setKeepBusyId] = useState<string | null>(null);
   const page = pages[index];
+
+  async function toggleKeepAttachment() {
+    if (!page || keepBusyId) return;
+    const next = !keepById[page.id];
+    setKeepById((prev) => ({ ...prev, [page.id]: next }));
+    setKeepBusyId(page.id);
+    const result = await setKeepAttachmentRequest(page.id, next);
+    if (!result.ok) {
+      // Revert on failure — the server state is the source of truth.
+      setKeepById((prev) => ({ ...prev, [page.id]: !next }));
+    }
+    setKeepBusyId(null);
+  }
 
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
@@ -120,16 +146,35 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
         <p className="text-[13px] font-semibold text-white">
           Receipt{pages.length > 1 ? ` · Page ${index + 1} of ${pages.length}` : ""}
         </p>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close receipt viewer"
-          className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-2">
+          {page && (
+            <button
+              type="button"
+              onClick={toggleKeepAttachment}
+              disabled={keepBusyId === page.id}
+              aria-pressed={!!keepById[page.id]}
+              aria-label="Keep attachment"
+              title="Keep Attachment — never deleted by Cleanup"
+              className={cn(
+                "flex h-9 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-[12px] font-semibold text-white disabled:opacity-50",
+                keepById[page.id] && "bg-amber/20 text-amber"
+              )}
+            >
+              <Star size={14} strokeWidth={2.2} fill={keepById[page.id] ? "currentColor" : "none"} />
+              {keepById[page.id] ? "Kept" : "Keep"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close receipt viewer"
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div

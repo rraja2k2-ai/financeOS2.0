@@ -40,3 +40,23 @@ export async function fetchReceiptPagesRequest(id: string): Promise<FetchReceipt
     return { ok: false, error: "Couldn't reach the server. Try again." };
   }
 }
+
+export type SetKeepAttachmentResult = { ok: true } | { ok: false; error: string };
+
+/** Attachment Management MVP, Feature 2 — toggles one attachment's "Keep Attachment" flag. */
+export async function setKeepAttachmentRequest(attachmentId: string, keepAttachment: boolean): Promise<SetKeepAttachmentResult> {
+  try {
+    const res = await fetch(`/api/receipt-attachments/${attachmentId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keepAttachment }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      return { ok: false, error: body?.error ?? "Couldn't update this attachment. Try again." };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Couldn't reach the server. Try again." };
+  }
+}

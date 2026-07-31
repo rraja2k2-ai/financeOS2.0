@@ -85,3 +85,39 @@ export async function listByHeaderId(supabase: SupabaseClient, headerId: string)
 
   return data || [];
 }
+
+/**
+ * Attachments whose original file is eligible for Manual Cleanup: created before
+ * `cutoffIso`, not flagged Keep Attachment, and still has a Storage file to remove
+ * (already-cleaned rows have `storage_path = null` and are naturally excluded).
+ */
+export async function listEligibleForCleanup(supabase: SupabaseClient, cutoffIso: string): Promise<ReceiptAttachment[]> {
+  const { data, error } = await supabase
+    .from("receipt_attachments")
+    .select("*")
+    .eq("keep_attachment", false)
+    .not("storage_path", "is", null)
+    .lt("created_at", cutoffIso);
+
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}
+
+/**
+ * Clears storage_path (only) on the given attachment rows — called once their Storage
+ * files have been removed, so the app knows not to look for them again. The row itself
+ * stays, per the Attachment Management MVP's "record may remain to indicate a receipt
+ * once existed."
+ */
+export async function clearStoragePaths(supabase: SupabaseClient, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+
+  const { error } = await supabase.from("receipt_attachments").update({ storage_path: null }).in("id", ids);
+
+  if (error) {
+    throw error;
+  }
+}

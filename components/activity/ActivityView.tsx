@@ -209,6 +209,14 @@ export function ActivityView({
     return () => clearTimeout(t);
   }, [toast]);
 
+  // actionError is now a fixed banner (Feature 4 fix, above) rather than inline page
+  // content — same auto-clear as toast so it doesn't linger indefinitely on screen.
+  useEffect(() => {
+    if (!actionError) return;
+    const t = setTimeout(() => setActionError(null), 4000);
+    return () => clearTimeout(t);
+  }, [actionError]);
+
   // Auto-save (Phase F) happens in the background, outside any request this page is
   // part of — refresh when the global Inbox indicator signals a capture just finished
   // (same event enqueue/retry/delete already dispatch), so a newly saved transaction
@@ -459,7 +467,22 @@ export function ActivityView({
         ))
       )}
 
-      {actionError && <p className="mt-3 text-[12px] font-semibold text-destructive">{actionError}</p>}
+      {/* Receipt Viewer Consistency (Attachment Management MVP, Feature 4) — this must be
+          `fixed`, not inline: the list above can run far taller than the viewport, and an
+          inline banner rendered after it (the previous behavior) sat below the fold,
+          invisible until the user scrolled the entire list — unlike Transaction Details'
+          own always-visible error, immediately below its sticky header. Fixed positioning
+          makes both entry points show "No receipt was attached to this transaction."
+          the moment it fires, matching Transaction Details' behavior exactly. */}
+      {actionError && (
+        <p
+          role="alert"
+          className="fixed inset-x-0 z-[80] mx-auto w-fit max-w-[90%] rounded-full bg-destructive px-4 py-2.5 text-[13px] font-semibold text-white shadow-lg"
+          style={{ bottom: "calc(96px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          {actionError}
+        </p>
+      )}
 
       {/* Header overflow menu — rendered through a portal so a short card (one line item,
           or none) can never clip it via the card's own overflow-hidden. Position is the
