@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -81,6 +81,15 @@ export function DashboardView({
   // Final Polish, Part 4) — never duplicated per screen.
   const { anchor: menuAnchor, toggle: toggleMenu, close: closeMenu } = useOverflowMenu();
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Receipt Viewer Consistency (PR #19 final review, Issue 3) — same fixed-banner fix as
+  // ActivityView.tsx: an inline error after the transaction list can sit below the fold,
+  // so this must render as an always-visible banner with the same auto-clear as Activity's.
+  useEffect(() => {
+    if (!actionError) return;
+    const t = setTimeout(() => setActionError(null), 4000);
+    return () => clearTimeout(t);
+  }, [actionError]);
   // View Receipt / Delete (Part 5) — same handlers/requests as Activity's own menu, via
   // lib/transaction-actions.ts, never a second copy of the fetch logic.
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
@@ -434,7 +443,15 @@ export function DashboardView({
         )}
       </section>
 
-      {actionError && <p className="mb-4 text-[12px] font-semibold text-destructive">{actionError}</p>}
+      {actionError && (
+        <p
+          role="alert"
+          className="fixed inset-x-0 z-[80] mx-auto w-fit max-w-[90%] rounded-full bg-destructive px-4 py-2.5 text-[13px] font-semibold text-white shadow-lg"
+          style={{ bottom: "calc(96px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          {actionError}
+        </p>
+      )}
 
       {/* Overflow menu — portal-rendered so it's never clipped by a card's own overflow-hidden.
           Same actions as Activity's own menu (Edit/View Receipt/Delete — Transaction UX

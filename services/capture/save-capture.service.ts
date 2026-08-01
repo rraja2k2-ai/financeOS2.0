@@ -360,6 +360,9 @@ async function saveAttachmentRows(supabase: SupabaseClient, headerId: string, up
         page_no: i + 1,
         mime_type: page.mimeType,
         file_size_bytes: page.fileSizeBytes,
+        // Attachment Management MVP — newly saved attachments always start unprotected;
+        // the user opts in via the Receipt Viewer's Keep Attachment toggle.
+        keep_attachment: false,
         // Unused by this milestone (no thumbnails, no OCR changes, no base64/audit blob).
         original_file_url: "",
         thumbnail_url: "",

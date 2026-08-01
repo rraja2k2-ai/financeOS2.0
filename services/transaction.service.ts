@@ -4,6 +4,7 @@ import type { TransactionItem } from "@/domain/transaction-item";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import * as transactionItemRepository from "@/repositories/transaction-item.repository";
 import * as receiptAttachmentRepository from "@/repositories/receipt-attachment.repository";
+import * as receiptStorageRepository from "@/repositories/receipt-storage.repository";
 import { postTransactionSafely } from "@/services/finance/account-posting.service";
 
 export type Transaction = {
@@ -139,15 +140,23 @@ export async function updateTransaction(supabase: SupabaseClient, id: string, in
 }
 
 /**
- * Deletes the complete transaction: header, items, and receipt_attachments (DB records
- * only — the physical file in Supabase Storage is deliberately left in place; storage
- * cleanup is a separate concern for later).
+ * Deletes the complete transaction: header, items, and receipt_attachments — including
+ * the original file(s) in Supabase Storage, so a permanently deleted transaction never
+ * leaves an orphaned file behind (Attachment Management MVP, Feature 1). Storage removal
+ * is best-effort (same pattern as the Capture Inbox's own cleanup paths): a transient
+ * Storage failure must not block deleting the transaction itself.
  */
 export async function deleteTransaction(supabase: SupabaseClient, id: string): Promise<void> {
   const existingTransaction = await getTransaction(supabase, id);
 
   if (!existingTransaction) {
     throw new Error(`Transaction with id ${id} not found`);
+  }
+
+  const attachments = await receiptAttachmentRepository.listByHeaderId(supabase, id);
+  const storagePaths = attachments.map((a) => a.storage_path).filter((p): p is string => !!p);
+  if (storagePaths.length > 0) {
+    await receiptStorageRepository.removeReceiptPages(supabase, storagePaths).catch(() => {});
   }
 
   await receiptAttachmentRepository.removeByHeaderId(supabase, id);

@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-01 - Attachment Management MVP
+
+Receipt files can now be protected from cleanup, and old ones can be
+removed on your own schedule — without ever touching the underlying
+transaction or its financial data.
+
+### Added
+- **Keep Attachment** — mark an important receipt as protected from cleanup,
+  right from the Receipt Viewer; the toggle shows a clear on/off state and
+  confirms with a toast
+- **Manual Attachment Cleanup** (Settings → Data Management) — remove old
+  receipt images on a retention schedule you choose (30 days / 90 days /
+  180 days / Never); every attachment marked Keep Attachment is skipped,
+  and no financial data is ever touched — only the original file
+- Deleting a transaction now also removes its receipt file from storage —
+  no orphaned files left behind
+
+### Changed
+- The Receipt Viewer now shows the same, meaningful empty state at every
+  entry point when a transaction has no receipt attached, instead of an
+  inconsistent blank screen
+
+### Migration Required
+- `docs/database/migrations/020_receipt_attachment_keep_flag.sql`
+- `docs/database/migrations/021_receipt_attachment_update_policy.sql`
+- `docs/database/migrations/022_reload_schema_cache_keep_attachment.sql`
+
 ## [1.2.1] - 2026-07-21 - Capture Reliability & Navigation Polish
 
 Hardens the capture workflow end-to-end (the Capture screen now owns its

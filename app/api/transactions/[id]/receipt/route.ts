@@ -18,9 +18,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       attachments
         .filter((a) => a.storage_path)
         .map(async (a) => ({
+          id: a.id,
           url: await receiptStorageRepository.getSignedUrl(supabase, a.storage_path as string),
           mimeType: a.mime_type ?? "application/octet-stream",
           pageNo: a.page_no ?? 1,
+          keepAttachment: a.keep_attachment,
         }))
     );
 

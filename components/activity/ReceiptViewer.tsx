@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Star } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { setKeepAttachmentRequest } from "@/lib/transaction-actions";
 
 export type ReceiptViewerPage = {
+  id: string;
   url: string;
   mimeType: string;
   pageNo: number;
+  /** Attachment Management MVP, Feature 2 — "Keep Attachment" starts OFF; toggled here,
+   *  the one place a user looks at a receipt (Feature 4's single source of truth). */
+  keepAttachment: boolean;
 };
 
 const MIN_SCALE = 1;
@@ -34,7 +41,43 @@ function touchDistance(touches: TouchList | React.TouchList): number {
  */
 export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; onClose: () => void }) {
   const [index, setIndex] = useState(0);
+  // Local copy so toggling "Keep Attachment" reflects immediately without waiting on a
+  // caller refetch — the PATCH call itself is what actually persists it.
+  const [keepById, setKeepById] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(pages.map((p) => [p.id, p.keepAttachment]))
+  );
+  const [keepBusyId, setKeepBusyId] = useState<string | null>(null);
+  // Same toast pattern already used by ActivityView/DashboardView (fixed pill,
+  // auto-clears after 3s) — reused here rather than introducing a new one, since the
+  // toggle itself lives inside this shared viewer, not any one caller.
+  const [toast, setToast] = useState<string | null>(null);
   const page = pages[index];
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  async function toggleKeepAttachment() {
+    if (!page || keepBusyId) return;
+    const next = !keepById[page.id];
+    setKeepById((prev) => ({ ...prev, [page.id]: next }));
+    setKeepBusyId(page.id);
+    const result = await setKeepAttachmentRequest(page.id, next);
+    if (result.ok) {
+      // Confirms the visual state reflects what actually persisted — the toast only
+      // fires once the API call has succeeded, never on the optimistic flip alone.
+      setToast(next ? "Receipt protected from cleanup." : "Receipt will be eligible for cleanup.");
+    } else {
+      // Revert on failure — the server state is the source of truth. Now also surfaced
+      // to the user (previously silent, which is what made a real failure look like an
+      // unexplained "flicker" rather than a visible, understandable error).
+      setKeepById((prev) => ({ ...prev, [page.id]: !next }));
+      setToast(result.error);
+    }
+    setKeepBusyId(null);
+  }
 
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
@@ -120,16 +163,35 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
         <p className="text-[13px] font-semibold text-white">
           Receipt{pages.length > 1 ? ` · Page ${index + 1} of ${pages.length}` : ""}
         </p>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close receipt viewer"
-          className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-2">
+          {page && (
+            <button
+              type="button"
+              onClick={toggleKeepAttachment}
+              disabled={keepBusyId === page.id}
+              aria-pressed={!!keepById[page.id]}
+              aria-label={keepById[page.id] ? "Keep Attachment — on, tap to turn off" : "Keep Attachment — off, tap to turn on"}
+              title="Never deleted by Manual Cleanup"
+              className={cn(
+                "flex h-9 items-center gap-1.5 rounded-xl border px-3 text-[12px] font-semibold transition-colors disabled:opacity-50",
+                keepById[page.id] ? "border-amber bg-amber/25 text-amber" : "border-white/15 bg-white/10 text-white/80"
+              )}
+            >
+              <Star size={14} strokeWidth={2.2} fill={keepById[page.id] ? "currentColor" : "none"} />
+              {keepById[page.id] ? "Kept" : "Keep Attachment"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close receipt viewer"
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div
@@ -176,6 +238,16 @@ export function ReceiptViewer({ pages, onClose }: { pages: ReceiptViewerPage[]; 
           >
             Next
           </button>
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed inset-x-0 z-[80] mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2.5 text-[13px] font-semibold text-background shadow-lg"
+          style={{ bottom: "calc(96px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          {toast}
         </div>
       )}
     </div>
