@@ -30,9 +30,18 @@
  *                 ever produces a negative sgd_total_amount; ordinary Capture/Review
  *                 amounts stay non-negative (validateForType), unaffected by this.
  *
- * Every delta is computed in the AFFECTED account's own currency (converting the
- * header's sgd_total_amount via exchange.service.ts's existing rate table, reversed) —
- * this is what makes a same-currency and a cross-currency Transfer the same code path.
+ * Every delta is computed in the AFFECTED account's own currency. When that account's
+ * currency matches the header's OWN currency (source account of every type; a
+ * same-currency Transfer's target too), the header's `original_amount` already IS the
+ * exact native amount — used directly, no conversion. Only a leg whose currency differs
+ * from the header's (a cross-currency Transfer's target) has no stored native amount and
+ * must derive one from `sgd_total_amount` via exchange.service.ts's rate table. Bug fix
+ * (Adjust Balance accuracy, v1.8.0 review): this used to reconvert EVERY leg from
+ * sgd_total_amount, even the same-currency one — a needless native → base → native
+ * round trip through an intermediate rounded base-currency amount, which is lossy for
+ * any non-base-currency account (e.g. adjusting an INR account to an exact target
+ * landed a few cents off). Using the already-exact `original_amount` for the
+ * same-currency case removes that round trip instead of just rounding differently.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as accountRepository from "@/repositories/account.repository";
@@ -43,6 +52,8 @@ export type PostingHeader = {
   transaction_type: string;
   source_account_id: string | null;
   target_account_id: string | null;
+  currency: string;
+  original_amount: string | number;
   sgd_total_amount: string | number;
 };
 
@@ -51,13 +62,17 @@ export type PostingDelta = { accountId: string; delta: number };
 async function deltaForAccount(
   supabase: SupabaseClient,
   accountId: string,
+  header: PostingHeader,
   currencyById: Map<string, string>,
   sgdAmount: number,
   sign: 1 | -1
 ): Promise<PostingDelta | null> {
   const currency = currencyById.get(accountId);
   if (!currency) return null; // account no longer exists (e.g. deleted) — nothing to post
-  const nativeAmount = await convertFromBaseCurrency(supabase, sgdAmount, currency);
+  const nativeAmount =
+    currency.toUpperCase() === header.currency.toUpperCase()
+      ? Math.abs(Number(header.original_amount))
+      : await convertFromBaseCurrency(supabase, sgdAmount, currency);
   return { accountId, delta: round2(sign * nativeAmount) };
 }
 
@@ -74,7 +89,7 @@ export async function computePostingDeltas(
   const deltas: PostingDelta[] = [];
   const push = async (accountId: string | null, sign: 1 | -1) => {
     if (!accountId) return;
-    const d = await deltaForAccount(supabase, accountId, currencyById, sgdAmount, sign);
+    const d = await deltaForAccount(supabase, accountId, header, currencyById, sgdAmount, sign);
     if (d) deltas.push(d);
   };
 
