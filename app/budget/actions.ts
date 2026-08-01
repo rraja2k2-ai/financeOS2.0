@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { projectBudgetRepository } from "@/repositories";
-import { resetMonthBudgetToPrevious, createCategory, renameCategory, archiveCategory } from "@/services/finance/budget.service";
+import { resetMonthBudgetToPrevious, createCategory, renameCategory, archiveCategory, restoreCategory } from "@/services/finance/budget.service";
 import type { CategoryType } from "@/domain/project-budget";
 
 export async function resetMonthToPreviousAction(projectId: string, month: string) {
@@ -112,6 +112,14 @@ export async function renameCategoryAction(input: {
 export async function archiveCategoryAction(input: { projectId: string; primaryCategory: string; secondaryCategory: string | null }) {
   const supabase = await createServerSupabaseClient();
   await archiveCategory(supabase, input.projectId, input.primaryCategory, input.secondaryCategory);
+  revalidatePath("/budget");
+  revalidatePath("/settings/categories");
+}
+
+/** v1.8.0 — restores a previously archived category (flags the Category Master row only). */
+export async function restoreCategoryAction(input: { projectId: string; primaryCategory: string; secondaryCategory: string | null }) {
+  const supabase = await createServerSupabaseClient();
+  await restoreCategory(supabase, input.projectId, input.primaryCategory, input.secondaryCategory);
   revalidatePath("/budget");
   revalidatePath("/settings/categories");
 }

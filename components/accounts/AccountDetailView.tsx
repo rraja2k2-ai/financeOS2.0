@@ -13,6 +13,7 @@ import type { ActivityTransaction } from "@/services/finance/activity.service";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { TransactionCard } from "@/components/activity/TransactionCard";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
+import { CorrectBalanceForm } from "@/components/accounts/CorrectBalanceForm";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
 import { useOverflowMenu } from "@/hooks/useOverflowMenu";
 import { accountTypeLabel } from "@/constants/accounts";
@@ -41,6 +42,7 @@ export function AccountDetailView({ account, summary, recentTransactions, period
   // Account Detail has no local list to patch in place the way Dashboard does.
   const { anchor: menuAnchor, toggle: toggleMenu, close: closeMenu } = useOverflowMenu();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [adjustingBalance, setAdjustingBalance] = useState(false);
   const {
     masterData,
     editing,
@@ -86,6 +88,13 @@ export function AccountDetailView({ account, summary, recentTransactions, period
           </svg>
         </Link>
         <h1 className="flex-1 truncate text-[19px] font-bold tracking-tight">{account.account_name}</h1>
+        <button
+          type="button"
+          onClick={() => setAdjustingBalance(true)}
+          className="flex-none rounded-lg border border-dashed border-border px-2.5 py-1.5 text-[11.5px] font-semibold text-primary"
+        >
+          Adjust Balance
+        </button>
       </div>
 
       <section className="mb-6">
@@ -206,6 +215,27 @@ export function AccountDetailView({ account, summary, recentTransactions, period
           onSave={saveEditor}
           onDelete={deleteEditor}
         />
+      )}
+
+      {/* Adjust Balance (v1.8.0) — the same shared workflow as Settings → Accounts →
+          Edit → Correct Balance (components/accounts/CorrectBalanceForm.tsx), reachable
+          directly from the Accounts drill-down page. Refreshes this page's server data
+          on success so Current Balance reflects the new Adjustment transaction. */}
+      {adjustingBalance && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/50 px-6 py-10">
+          <div className="w-full max-w-[380px] rounded-[var(--radius-lg)] border border-border bg-card p-5">
+            <p className="text-[14.5px] font-bold">Adjust Balance</p>
+            <p className="mt-1 text-[12px] text-muted-foreground">{account.account_name}</p>
+            <CorrectBalanceForm
+              account={account}
+              onDone={() => {
+                setAdjustingBalance(false);
+                router.refresh();
+              }}
+              onCancel={() => setAdjustingBalance(false)}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

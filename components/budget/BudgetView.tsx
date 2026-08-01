@@ -11,6 +11,7 @@ import {
   createCategoryAction,
   renameCategoryAction,
   archiveCategoryAction,
+  restoreCategoryAction,
 } from "@/app/budget/actions";
 import type { CategoryBudgetVsActual } from "@/services/finance/budget.service";
 import type { CategoryType } from "@/domain/project-budget";
@@ -31,6 +32,13 @@ export type BudgetViewProps = {
   totalActualSgd: number;
   sourceMonth: string | null;
   categories: CategoryBudgetVsActual[];
+  /** Distinct, non-archived Category Master primary/secondary names (v1.8.0 Budget UX) —
+   *  feeds Add Category's "existing" pickers so a new pairing can reuse an established
+   *  name instead of risking a near-duplicate free-text entry. */
+  existingPrimaries: string[];
+  existingSecondaries: string[];
+  /** Archived Category Master entries — feeds the Archived Categories / Restore list. */
+  archivedCategories: { primary: string; secondary: string | null }[];
 };
 
 function fmt(n: number, decimals = 0) {
@@ -69,6 +77,9 @@ export function BudgetView({
   totalActualSgd,
   sourceMonth,
   categories,
+  existingPrimaries,
+  existingSecondaries,
+  archivedCategories,
 }: BudgetViewProps) {
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
@@ -277,7 +288,18 @@ export function BudgetView({
       {/* Category Master (Decisions 4/5/6) — the Generic project's rows here ARE the
           category master Capture/AI/Review read from; this is the one place to add,
           rename, or archive one. */}
-      {projectId && <AddCategorySection projectId={projectId} month={month} />}
+      {projectId && (
+        <AddCategorySection
+          projectId={projectId}
+          month={month}
+          existingPrimaries={existingPrimaries}
+          existingSecondaries={existingSecondaries}
+        />
+      )}
+
+      {projectId && archivedCategories.length > 0 && (
+        <ArchivedCategoriesSection projectId={projectId} archivedCategories={archivedCategories} />
+      )}
 
       <p className="mt-4 rounded-[var(--radius-md)] border border-dashed border-border p-3.5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
         Household monthly budget. Per-project budgets live in the Projects module. Tap a category amount to edit it.
@@ -286,28 +308,55 @@ export function BudgetView({
   );
 }
 
-function AddCategorySection({ projectId, month }: { projectId: string; month: string }) {
+const NEW_OPTION = "__new__";
+
+function AddCategorySection({
+  projectId,
+  month,
+  existingPrimaries,
+  existingSecondaries,
+}: {
+  projectId: string;
+  month: string;
+  existingPrimaries: string[];
+  existingSecondaries: string[];
+}) {
   const [open, setOpen] = useState(false);
+  const [primaryChoice, setPrimaryChoice] = useState(NEW_OPTION);
   const [primary, setPrimary] = useState("");
+  const [secondaryChoice, setSecondaryChoice] = useState(NEW_OPTION);
   const [secondary, setSecondary] = useState("");
   const [categoryType, setCategoryType] = useState<CategoryType>("expense");
   const [error, setError] = useState<string | null>(null);
   const [pending, startPending] = useTransition();
 
+  const resolvedPrimary = primaryChoice === NEW_OPTION ? primary.trim() : primaryChoice;
+  const resolvedSecondary = secondaryChoice === NEW_OPTION ? secondary.trim() : secondaryChoice;
+
+  function reset() {
+    setPrimaryChoice(NEW_OPTION);
+    setPrimary("");
+    setSecondaryChoice(NEW_OPTION);
+    setSecondary("");
+    setCategoryType("expense");
+  }
+
   function handleAdd() {
     setError(null);
+    if (!resolvedPrimary) {
+      setError("Primary category is required.");
+      return;
+    }
     startPending(async () => {
       try {
         await createCategoryAction({
           projectId,
           month,
-          primaryCategory: primary,
-          secondaryCategory: secondary.trim() || null,
+          primaryCategory: resolvedPrimary,
+          secondaryCategory: resolvedSecondary || null,
           categoryType,
         });
-        setPrimary("");
-        setSecondary("");
-        setCategoryType("expense");
+        reset();
         setOpen(false);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not add category.");
@@ -332,18 +381,52 @@ function AddCategorySection({ projectId, month }: { projectId: string; month: st
       <p className="mb-2.5 text-[13px] font-bold">Add Category</p>
       <div className="space-y-2.5">
         <div className="grid grid-cols-2 gap-2.5">
-          <input
-            className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
-            placeholder="Primary category"
-            value={primary}
-            onChange={(e) => setPrimary(e.target.value)}
-          />
-          <input
-            className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
-            placeholder="Secondary (optional)"
-            value={secondary}
-            onChange={(e) => setSecondary(e.target.value)}
-          />
+          <div>
+            <label className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">Primary</label>
+            <select
+              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
+              value={primaryChoice}
+              onChange={(e) => setPrimaryChoice(e.target.value)}
+            >
+              <option value={NEW_OPTION}>+ New primary…</option>
+              {existingPrimaries.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+            {primaryChoice === NEW_OPTION && (
+              <input
+                className="mt-1.5 w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
+                placeholder="New primary category"
+                value={primary}
+                onChange={(e) => setPrimary(e.target.value)}
+              />
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">Secondary (optional)</label>
+            <select
+              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
+              value={secondaryChoice}
+              onChange={(e) => setSecondaryChoice(e.target.value)}
+            >
+              <option value={NEW_OPTION}>+ New secondary…</option>
+              {existingSecondaries.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            {secondaryChoice === NEW_OPTION && (
+              <input
+                className="mt-1.5 w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
+                placeholder="New secondary (optional)"
+                value={secondary}
+                onChange={(e) => setSecondary(e.target.value)}
+              />
+            )}
+          </div>
         </div>
         <select
           className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
@@ -360,7 +443,7 @@ function AddCategorySection({ projectId, month }: { projectId: string; month: st
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={pending || !primary.trim()}
+            disabled={pending || !resolvedPrimary}
             onClick={handleAdd}
             className="flex-1 rounded-lg bg-primary py-2 text-[13px] font-semibold text-primary-foreground disabled:opacity-50"
           >
@@ -371,6 +454,7 @@ function AddCategorySection({ projectId, month }: { projectId: string; month: st
             onClick={() => {
               setOpen(false);
               setError(null);
+              reset();
             }}
             disabled={pending}
             className="flex-1 rounded-lg border border-border py-2 text-[13px] font-semibold disabled:opacity-50"
@@ -379,6 +463,70 @@ function AddCategorySection({ projectId, month }: { projectId: string; month: st
           </button>
         </div>
       </div>
+    </section>
+  );
+}
+
+/** Archived Categories / Restore (v1.8.0) — the explicit counterpart to each subcategory
+ *  row's Archive action; mirrors Settings → Accounts' "Show Archived" list pattern. */
+function ArchivedCategoriesSection({
+  projectId,
+  archivedCategories,
+}: {
+  projectId: string;
+  archivedCategories: { primary: string; secondary: string | null }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [restoringKey, setRestoringKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startPending] = useTransition();
+
+  function handleRestore(primary: string, secondary: string | null) {
+    const key = `${primary}::${secondary ?? ""}`;
+    setError(null);
+    setRestoringKey(key);
+    startPending(async () => {
+      try {
+        await restoreCategoryAction({ projectId, primaryCategory: primary, secondaryCategory: secondary });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not restore category.");
+      } finally {
+        setRestoringKey(null);
+      }
+    });
+  }
+
+  return (
+    <section className="mb-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between rounded-[var(--radius-md)] border border-border bg-card px-3.5 py-2.5 text-[12px] font-semibold text-muted-foreground"
+      >
+        <span>Archived Categories ({archivedCategories.length})</span>
+        <span>{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
+          {archivedCategories.map((c, i) => {
+            const key = `${c.primary}::${c.secondary ?? ""}`;
+            return (
+              <div key={key} className={cn("flex items-center justify-between gap-2 p-3", i > 0 && "border-t border-border")}>
+                <span className="truncate text-[12.5px]">{c.secondary ? `${c.primary} / ${c.secondary}` : c.primary}</span>
+                <button
+                  type="button"
+                  disabled={pending && restoringKey === key}
+                  onClick={() => handleRestore(c.primary, c.secondary)}
+                  className="flex-none text-[11.5px] font-semibold text-primary disabled:opacity-50"
+                >
+                  {pending && restoringKey === key ? "Restoring…" : "Restore"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {error && <p className="mt-1.5 text-[11px] font-semibold text-destructive">{error}</p>}
     </section>
   );
 }
