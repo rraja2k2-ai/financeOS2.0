@@ -5,8 +5,15 @@ import Link from "next/link";
 import { Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { shiftMonth, monthLabel, monthBounds, startOfMonthIso } from "@/lib/period";
-import { resetMonthToPreviousAction, updateBudgetAmountAction } from "@/app/budget/actions";
+import {
+  resetMonthToPreviousAction,
+  updateBudgetAmountAction,
+  createCategoryAction,
+  renameCategoryAction,
+  archiveCategoryAction,
+} from "@/app/budget/actions";
 import type { CategoryBudgetVsActual } from "@/services/finance/budget.service";
+import type { CategoryType } from "@/domain/project-budget";
 
 /**
  * UI Phase 4 (Premium Budget Experience) — presentation-only redesign. All figures
@@ -267,10 +274,112 @@ export function BudgetView({
         )}
       </section>
 
-      <p className="rounded-[var(--radius-md)] border border-dashed border-border p-3.5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
+      {/* Category Master (Decisions 4/5/6) — the Generic project's rows here ARE the
+          category master Capture/AI/Review read from; this is the one place to add,
+          rename, or archive one. */}
+      {projectId && <AddCategorySection projectId={projectId} month={month} />}
+
+      <p className="mt-4 rounded-[var(--radius-md)] border border-dashed border-border p-3.5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
         Household monthly budget. Per-project budgets live in the Projects module. Tap a category amount to edit it.
       </p>
     </div>
+  );
+}
+
+function AddCategorySection({ projectId, month }: { projectId: string; month: string }) {
+  const [open, setOpen] = useState(false);
+  const [primary, setPrimary] = useState("");
+  const [secondary, setSecondary] = useState("");
+  const [categoryType, setCategoryType] = useState<CategoryType>("expense");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startPending] = useTransition();
+
+  function handleAdd() {
+    setError(null);
+    startPending(async () => {
+      try {
+        await createCategoryAction({
+          projectId,
+          month,
+          primaryCategory: primary,
+          secondaryCategory: secondary.trim() || null,
+          categoryType,
+        });
+        setPrimary("");
+        setSecondary("");
+        setCategoryType("expense");
+        setOpen(false);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not add category.");
+      }
+    });
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mb-4 w-full rounded-[var(--radius-md)] border border-dashed border-border py-2.5 text-[12.5px] font-semibold text-primary"
+      >
+        + Add Category
+      </button>
+    );
+  }
+
+  return (
+    <section className="mb-4 rounded-[var(--radius-lg)] border border-border bg-card p-3.5 shadow-md">
+      <p className="mb-2.5 text-[13px] font-bold">Add Category</p>
+      <div className="space-y-2.5">
+        <div className="grid grid-cols-2 gap-2.5">
+          <input
+            className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
+            placeholder="Primary category"
+            value={primary}
+            onChange={(e) => setPrimary(e.target.value)}
+          />
+          <input
+            className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
+            placeholder="Secondary (optional)"
+            value={secondary}
+            onChange={(e) => setSecondary(e.target.value)}
+          />
+        </div>
+        <select
+          className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-primary"
+          value={categoryType}
+          onChange={(e) => setCategoryType(e.target.value as CategoryType)}
+        >
+          <option value="expense">Expense</option>
+          <option value="income">Income</option>
+        </select>
+        {categoryType === "income" && (
+          <p className="text-[11px] text-muted-foreground">Income categories are selectable in Capture/Review but don&apos;t show a budget card here.</p>
+        )}
+        {error && <p className="text-[12px] font-semibold text-destructive">{error}</p>}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={pending || !primary.trim()}
+            onClick={handleAdd}
+            className="flex-1 rounded-lg bg-primary py-2 text-[13px] font-semibold text-primary-foreground disabled:opacity-50"
+          >
+            {pending ? "Adding…" : "Add"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setError(null);
+            }}
+            disabled={pending}
+            className="flex-1 rounded-lg border border-border py-2 text-[13px] font-semibold disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -328,9 +437,14 @@ function SubcategoryRow({
   primaryCategory: string;
   sub: { id: string | null; name: string; budgetedSgd: number; actualSgd: number };
 }) {
-  const [editing, setEditing] = useState(false);
+  const [mode, setMode] = useState<"view" | "editAmount" | "rename" | "confirmArchive">("view");
   const [draft, setDraft] = useState(sub.budgetedSgd > 0 ? String(sub.budgetedSgd) : "");
+  const [renamePrimary, setRenamePrimary] = useState(primaryCategory);
+  const [renameSecondary, setRenameSecondary] = useState(sub.name === "General" ? "" : sub.name);
+  const [error, setError] = useState<string | null>(null);
   const [isSaving, startSaving] = useTransition();
+
+  const secondaryCategory = sub.name === "General" ? null : sub.name;
 
   function handleSave() {
     if (!projectId) return;
@@ -342,14 +456,47 @@ function SubcategoryRow({
         projectId,
         month,
         primaryCategory,
-        secondaryCategory: sub.name === "General" ? null : sub.name,
+        secondaryCategory,
         amountSgd: amount,
       });
-      setEditing(false);
+      setMode("view");
     });
   }
 
-  if (editing) {
+  function handleRename() {
+    if (!projectId) return;
+    setError(null);
+    startSaving(async () => {
+      try {
+        await renameCategoryAction({
+          projectId,
+          month,
+          oldPrimaryCategory: primaryCategory,
+          oldSecondaryCategory: secondaryCategory,
+          newPrimaryCategory: renamePrimary,
+          newSecondaryCategory: renameSecondary.trim() || null,
+        });
+        setMode("view");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not rename.");
+      }
+    });
+  }
+
+  function handleArchive() {
+    if (!projectId) return;
+    setError(null);
+    startSaving(async () => {
+      try {
+        await archiveCategoryAction({ projectId, primaryCategory, secondaryCategory });
+        setMode("view");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not archive.");
+      }
+    });
+  }
+
+  if (mode === "editAmount") {
     return (
       <div className="flex items-center gap-1.5 border-l-2 border-primary py-1 pl-3.5 text-[12px]">
         <span className="flex-1 text-muted-foreground">{sub.name}</span>
@@ -366,24 +513,80 @@ function SubcategoryRow({
         <button type="button" onClick={handleSave} disabled={isSaving} className="text-[11px] font-semibold text-primary disabled:opacity-50">
           {isSaving ? "…" : "Save"}
         </button>
-        <button type="button" onClick={() => setEditing(false)} className="text-[11px] font-semibold text-muted-foreground">
+        <button type="button" onClick={() => setMode("view")} className="text-[11px] font-semibold text-muted-foreground">
           Cancel
         </button>
       </div>
     );
   }
 
+  if (mode === "rename") {
+    return (
+      <div className="space-y-1.5 border-l-2 border-primary py-1.5 pl-3.5 text-[12px]">
+        <div className="flex items-center gap-1.5">
+          <input
+            className="w-24 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11.5px] outline-none focus:border-primary"
+            value={renamePrimary}
+            onChange={(e) => setRenamePrimary(e.target.value)}
+            placeholder="Primary"
+          />
+          <input
+            className="w-24 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11.5px] outline-none focus:border-primary"
+            value={renameSecondary}
+            onChange={(e) => setRenameSecondary(e.target.value)}
+            placeholder="Secondary"
+          />
+        </div>
+        {error && <p className="text-[10.5px] font-semibold text-destructive">{error}</p>}
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={handleRename} disabled={isSaving} className="text-[11px] font-semibold text-primary disabled:opacity-50">
+            {isSaving ? "Saving…" : "Save rename"}
+          </button>
+          <button type="button" onClick={() => setMode("view")} className="text-[11px] font-semibold text-muted-foreground">
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "confirmArchive") {
+    return (
+      <div className="space-y-1.5 border-l-2 border-destructive py-1.5 pl-3.5 text-[12px]">
+        <p className="text-[11px] text-muted-foreground">
+          Archive &quot;{sub.name}&quot;? It stops appearing in Capture/Review and future months — this month and earlier are unaffected.
+        </p>
+        {error && <p className="text-[10.5px] font-semibold text-destructive">{error}</p>}
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={handleArchive} disabled={isSaving} className="text-[11px] font-semibold text-destructive disabled:opacity-50">
+            {isSaving ? "Archiving…" : "Confirm archive"}
+          </button>
+          <button type="button" onClick={() => setMode("view")} className="text-[11px] font-semibold text-muted-foreground">
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={() => projectId && setEditing(true)}
-      disabled={!projectId}
-      className="flex w-full justify-between border-l-2 border-border py-1 pl-3.5 text-left text-[12px] text-muted-foreground disabled:cursor-default"
-    >
-      <span>{sub.name}</span>
-      <span className="font-mono font-semibold tabular-nums text-foreground">
+    <div className="group flex w-full items-center justify-between gap-1.5 border-l-2 border-border py-1 pl-3.5 text-[12px] text-muted-foreground">
+      <button type="button" onClick={() => projectId && setMode("editAmount")} disabled={!projectId} className="min-w-0 flex-1 truncate text-left">
+        {sub.name}
+      </button>
+      <span className="flex-none font-mono font-semibold tabular-nums text-foreground">
         {fmt(sub.actualSgd)} / {sub.budgetedSgd > 0 ? fmt(sub.budgetedSgd) : "—"}
       </span>
-    </button>
+      {projectId && (
+        <div className="flex flex-none items-center gap-1.5">
+          <button type="button" onClick={() => setMode("rename")} className="text-[10.5px] font-semibold text-muted-foreground underline decoration-dotted">
+            Rename
+          </button>
+          <button type="button" onClick={() => setMode("confirmArchive")} className="text-[10.5px] font-semibold text-muted-foreground underline decoration-dotted">
+            Archive
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

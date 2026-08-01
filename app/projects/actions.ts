@@ -133,6 +133,8 @@ export async function saveProjectCategoryBudgetAction(input: {
       primary_category: input.primaryCategory,
       secondary_category: null,
       category_type: "expense",
+      is_archived: false,
+      row_type: "LIFETIME",
       ...fields,
     });
   }

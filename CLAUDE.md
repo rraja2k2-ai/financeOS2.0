@@ -243,6 +243,31 @@ project, and monitor accounts and investments.
   tracking for the external case, and account balance posting
   (`accounts.current_balance` is still never updated by any transaction).
 
+- **`project_budgets` is the single budget table, reused for three distinct
+  concerns via `row_type`, its one row discriminator** (`CHECK` constraint —
+  `MONTHLY`, `LIFETIME`, `CATEGORY_MASTER` — migration 025). `row_type` is
+  the only signal any repository or service may use to determine what a row
+  represents. `budget_month` holds calendar information only and must never
+  be compared against a value to infer row identity — a future need for
+  another non-monthly row kind must extend `row_type`, never reach for a
+  `budget_month` value trick.
+  - **`MONTHLY`** rows are real calendar-month budget lines — normal
+    monthly budgets, cloned/reset/carried-forward month to month.
+  - **`LIFETIME`** rows are a named project's non-monthly lifetime budget
+    lines (`services/finance/project.service.ts`) — one row per project per
+    category, never cloned or reset, `budget_month` unused.
+  - **`CATEGORY_MASTER`** rows are category identity data, one permanent row
+    per (`primary_category`, `secondary_category`) pair, living on the
+    Generic project. **The Generic project's `CATEGORY_MASTER` rows are the
+    single source of truth for every category FinanceOS knows about** —
+    Capture, Review, AI Categorization, Budget, and the Categories Settings
+    reference page all read this same set; no other table or constant
+    defines categories. `is_archived` on a `CATEGORY_MASTER` row retires a
+    category (removed from Capture/Review/Budget's "add category" list and
+    from future-month cloning) without touching any historical `MONTHLY`
+    row. Budget is the only place `CATEGORY_MASTER` rows are created,
+    renamed, or archived.
+
 ---
 
 ## 5. Capture Architecture

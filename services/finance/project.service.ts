@@ -2,9 +2,10 @@
  * Project module service — live analytics for the Project workspace.
  *
  * Budget model (per product decision):
- *   - Per-category PROJECT budgets live in project_budgets under a sentinel budget_month
- *     (PROJECT_BUDGET_MONTH) — projects are lifetime, not monthly, so one fixed month
- *     keeps them cleanly separate from Generic's real monthly household budget.
+ *   - Per-category PROJECT budgets live in project_budgets as row_type = 'LIFETIME' rows
+ *     — projects are lifetime, not monthly, so this discriminator (not a sentinel
+ *     budget_month value) keeps them cleanly separate from Generic's real monthly
+ *     household budget and from Category Master rows.
  *   - A project's total budget = the sum of its category budget lines (SGD).
  *   - budget_type 'fixed' shows Budget vs Spent vs Remaining; 'track_only' shows spend only.
  *
@@ -20,7 +21,9 @@ import type { Project } from "@/domain/project";
 import type { TransactionHeader } from "@/domain/transaction-header";
 import { isExpenseTransaction } from "@/lib/expense-filter";
 
-/** Sentinel budget_month for lifetime project budgets — never collides with real months. */
+/** budget_month filler for LIFETIME rows — satisfies the NOT NULL constraint only.
+ *  row_type = 'LIFETIME' is the sole discriminator; nothing may ever compare
+ *  budget_month against this value to infer identity. */
 export const PROJECT_BUDGET_MONTH = "1900-01-01";
 
 export type ProjectAnalytics = {
@@ -74,7 +77,7 @@ function analyticsFrom(headers: TransactionHeader[], budgetLines: { primary_cate
 export async function getProjectAnalytics(supabase: SupabaseClient, projectId: string): Promise<ProjectAnalytics> {
   const [headers, budgetLines] = await Promise.all([
     transactionHeaderRepository.listByProjectId(supabase, projectId),
-    projectBudgetRepository.listByProjectMonth(supabase, projectId, PROJECT_BUDGET_MONTH),
+    projectBudgetRepository.listLifetimeByProject(supabase, projectId),
   ]);
   return analyticsFrom(headers, budgetLines);
 }
@@ -83,7 +86,7 @@ export async function getProjectAnalytics(supabase: SupabaseClient, projectId: s
 export async function getProjectCategorySummary(supabase: SupabaseClient, projectId: string): Promise<ProjectCategorySummary[]> {
   const [headers, budgetLines] = await Promise.all([
     transactionHeaderRepository.listByProjectId(supabase, projectId),
-    projectBudgetRepository.listByProjectMonth(supabase, projectId, PROJECT_BUDGET_MONTH),
+    projectBudgetRepository.listLifetimeByProject(supabase, projectId),
   ]);
 
   const spentByCategory = new Map<string, number>();
@@ -140,7 +143,7 @@ export type ProjectDetail = {
 export async function getProjectDetail(supabase: SupabaseClient, projectId: string): Promise<ProjectDetail> {
   const [headers, budgetLines] = await Promise.all([
     transactionHeaderRepository.listByProjectId(supabase, projectId),
-    projectBudgetRepository.listByProjectMonth(supabase, projectId, PROJECT_BUDGET_MONTH),
+    projectBudgetRepository.listLifetimeByProject(supabase, projectId),
   ]);
 
   const analytics = analyticsFrom(headers, budgetLines);
@@ -191,13 +194,15 @@ export type ProjectSummary = {
 
 /**
  * Lightweight summary for every project, for the Project list page. One pass over all
- * headers + all sentinel budget lines, grouped in memory (both are small tables) — avoids
- * an N+1 of per-project queries.
+ * headers + all LIFETIME budget lines, grouped in memory (both are small tables) —
+ * avoids an N+1 of per-project queries. row_type = 'LIFETIME' scoping means this can
+ * never pick up Category Master rows, even though both currently share Generic as a
+ * project_id namespace neighbor.
  */
 export async function getProjectSummaries(supabase: SupabaseClient, projects: Project[]): Promise<ProjectSummary[]> {
   const [allHeaders, allBudgetLines] = await Promise.all([
     transactionHeaderRepository.list(supabase),
-    projectBudgetRepository.listByMonth(supabase, PROJECT_BUDGET_MONTH),
+    projectBudgetRepository.listLifetime(supabase),
   ]);
 
   const headersByProject = new Map<string, TransactionHeader[]>();

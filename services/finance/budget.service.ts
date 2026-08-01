@@ -11,8 +11,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as projectBudgetRepository from "@/repositories/project-budget.repository";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
-import type { ProjectBudget } from "@/domain/project-budget";
+import type { ProjectBudget, CategoryType } from "@/domain/project-budget";
 import type { CategorySpend } from "./category-spend.service";
+
+export class CategoryAlreadyExistsError extends Error {}
+export class CategoryNotFoundError extends Error {}
 
 export type MonthBudget = {
   month: string;
@@ -83,7 +86,17 @@ export async function cloneMonthBudget(
   ]);
 
   const existingKeys = new Set(existingLines.map((l) => `${l.primary_category}::${l.secondary_category ?? ""}`));
-  const toCopy = sourceLines.filter((l) => !existingKeys.has(`${l.primary_category}::${l.secondary_category ?? ""}`));
+  // Decision 5 — an archived category stops being copied into future months (earlier
+  // months, including `fromMonth` itself, are never touched by archiving). Archived
+  // status is checked against the Category Master row, not the source month's own
+  // is_archived copy — the master is the sole authority once a category is archived
+  // (real monthly rows never get retroactively updated when their category is archived
+  // later, so their own is_archived field can't be trusted for this decision).
+  const masterRows = await projectBudgetRepository.listCategoryMasterRows(supabase, projectId);
+  const archivedKeys = new Set(masterRows.filter((m) => m.is_archived).map((m) => `${m.primary_category}::${m.secondary_category ?? ""}`));
+  const toCopy = sourceLines.filter(
+    (l) => !archivedKeys.has(`${l.primary_category}::${l.secondary_category ?? ""}`) && !existingKeys.has(`${l.primary_category}::${l.secondary_category ?? ""}`)
+  );
 
   const created: ProjectBudget[] = [];
   for (const line of toCopy) {
@@ -97,6 +110,8 @@ export async function cloneMonthBudget(
       budget_amount: line.budget_amount,
       exchange_rate: line.exchange_rate,
       budget_amount_sgd: line.budget_amount_sgd,
+      is_archived: false,
+      row_type: "MONTHLY",
     });
     created.push(inserted);
   }
@@ -198,4 +213,143 @@ export async function getProjectActualSgd(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// ---------------------------------------------------------------------------------------
+// Category Master (Master Data & Account Management Refactor, Decisions 4/5/6 — row_type
+// discriminator design, per architecture review) — the Generic project's
+// row_type = 'CATEGORY_MASTER' rows in project_budgets are FinanceOS's one source of
+// truth for "what categories exist," replacing constants/categories.ts's
+// CATEGORY_TAXONOMY. row_type (not budget_month) is what structurally separates these
+// from real monthly budget data — the master's own lifecycle (create/rename/archive)
+// never interacts with Reset to Previous Month, cloning, or any other real-month
+// operation. Budget is the only place these are created/renamed/archived; Capture/
+// Review/the Categories Settings reference page all read the same listCategoryMaster()
+// result, never a second copy of the taxonomy.
+// ---------------------------------------------------------------------------------------
+
+/** budget_month filler for CATEGORY_MASTER rows — satisfies the NOT NULL constraint
+ *  only. row_type is the sole discriminator; nothing may ever compare budget_month
+ *  against this value to infer identity. */
+const CATEGORY_MASTER_FILLER_MONTH = "1900-01-01";
+
+export type CategoryMasterEntry = {
+  primary: string;
+  secondary: string | null;
+  categoryType: CategoryType;
+  isArchived: boolean;
+};
+
+/** Every category for a project (Generic, in practice) — one entry per Category Master
+ *  row, i.e. one per (primary, secondary) pair, permanently. Pass `includeArchived: true`
+ *  for a management view; Capture/Review's master data always excludes archived
+ *  categories (they're retired, not selectable). */
+export async function listCategoryMaster(supabase: SupabaseClient, projectId: string, includeArchived = false): Promise<CategoryMasterEntry[]> {
+  const rows = await projectBudgetRepository.listCategoryMasterRows(supabase, projectId);
+  return rows
+    .filter((r) => includeArchived || !r.is_archived)
+    .map((r) => ({
+      primary: r.primary_category,
+      secondary: r.secondary_category,
+      categoryType: r.category_type,
+      isArchived: r.is_archived,
+    }));
+}
+
+/**
+ * Adds a new category (Decision 5) — creates the permanent Category Master row (or
+ * revives it, if the pair already exists archived) AND a real budget_amount 0 row for
+ * `month` (the currently-viewed Budget month) so it's immediately visible/actionable
+ * there, exactly matching "it appears in current month, future months inherit it" (the
+ * clone mechanism already handles the "future months inherit it" half unchanged). If the
+ * pair already exists in the master and is active, throws — this isn't a rename.
+ */
+export async function createCategory(
+  supabase: SupabaseClient,
+  projectId: string,
+  month: string,
+  primary: string,
+  secondary: string | null,
+  categoryType: CategoryType
+): Promise<void> {
+  const existingMaster = await projectBudgetRepository.getCategoryMasterRow(supabase, projectId, primary, secondary);
+  if (existingMaster) {
+    if (!existingMaster.is_archived) {
+      throw new CategoryAlreadyExistsError(`"${secondary ? `${primary} / ${secondary}` : primary}" already exists.`);
+    }
+    await projectBudgetRepository.update(supabase, existingMaster.id, { is_archived: false });
+  } else {
+    await projectBudgetRepository.insert(supabase, {
+      project_id: projectId,
+      budget_month: CATEGORY_MASTER_FILLER_MONTH,
+      primary_category: primary,
+      secondary_category: secondary,
+      category_type: categoryType,
+      currency: "SGD",
+      budget_amount: "0",
+      exchange_rate: "1",
+      budget_amount_sgd: "0",
+      is_archived: false,
+      row_type: "CATEGORY_MASTER",
+    });
+  }
+
+  const existingMonthRow = await projectBudgetRepository.getByProjectCategoryMonth(supabase, projectId, primary, secondary, month);
+  if (!existingMonthRow) {
+    await projectBudgetRepository.insert(supabase, {
+      project_id: projectId,
+      budget_month: month,
+      primary_category: primary,
+      secondary_category: secondary,
+      category_type: categoryType,
+      currency: "SGD",
+      budget_amount: "0",
+      exchange_rate: "1",
+      budget_amount_sgd: "0",
+      is_archived: false,
+      row_type: "MONTHLY",
+    });
+  }
+}
+
+/** Renames a category — updates the permanent Category Master row (so Capture/Review/
+ *  Budget's "add category" list shows the new name immediately) AND every REAL monthly
+ *  row from `fromMonth` (typically the currently viewed month) onward, matching Decision
+ *  5's "previous months remain unchanged." Does not touch transaction_headers/
+ *  transaction_items: historical transactions keep whatever category name they were
+ *  saved with, same accounting-integrity reasoning as never rewriting a past transaction. */
+export async function renameCategory(
+  supabase: SupabaseClient,
+  projectId: string,
+  fromMonth: string,
+  oldPrimary: string,
+  oldSecondary: string | null,
+  newPrimary: string,
+  newSecondary: string | null
+): Promise<void> {
+  const master = await projectBudgetRepository.getCategoryMasterRow(supabase, projectId, oldPrimary, oldSecondary);
+  if (!master) {
+    throw new CategoryNotFoundError(`"${oldSecondary ? `${oldPrimary} / ${oldSecondary}` : oldPrimary}" doesn't exist.`);
+  }
+  await projectBudgetRepository.update(supabase, master.id, { primary_category: newPrimary, secondary_category: newSecondary });
+  await projectBudgetRepository.renameCategoryFromMonth(supabase, projectId, oldPrimary, oldSecondary, newPrimary, newSecondary, fromMonth);
+}
+
+/** Archives a category (Decision 5) — flags the permanent Category Master row so the
+ *  category stops being offered in Capture/Review/Budget's "add category" list and stops
+ *  being copied into future months (see cloneMonthBudget's archived-check against this
+ *  same row). Every real monthly row — including the currently viewed month's, if it
+ *  already has one — is left completely untouched, matching "existing months remain
+ *  unchanged." */
+export async function archiveCategory(
+  supabase: SupabaseClient,
+  projectId: string,
+  primary: string,
+  secondary: string | null
+): Promise<void> {
+  const master = await projectBudgetRepository.getCategoryMasterRow(supabase, projectId, primary, secondary);
+  if (!master) {
+    throw new CategoryNotFoundError(`"${secondary ? `${primary} / ${secondary}` : primary}" doesn't exist.`);
+  }
+  await projectBudgetRepository.update(supabase, master.id, { is_archived: true });
 }

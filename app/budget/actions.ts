@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { projectBudgetRepository } from "@/repositories";
-import { resetMonthBudgetToPrevious } from "@/services/finance/budget.service";
+import { resetMonthBudgetToPrevious, createCategory, renameCategory, archiveCategory } from "@/services/finance/budget.service";
+import type { CategoryType } from "@/domain/project-budget";
 
 export async function resetMonthToPreviousAction(projectId: string, month: string) {
   const supabase = await createServerSupabaseClient();
@@ -48,8 +49,69 @@ export async function updateBudgetAmountAction(input: {
       budget_amount: amount,
       exchange_rate: "1",
       budget_amount_sgd: amount,
+      is_archived: false,
+      row_type: "MONTHLY",
     });
   }
 
   revalidatePath("/budget");
+}
+
+/** Decision 5 — adds a new category (or revives an archived one) to the Category Master
+ *  (Generic project). See budget.service.ts's createCategory for the revive/duplicate rules. */
+export async function createCategoryAction(input: {
+  projectId: string;
+  month: string;
+  primaryCategory: string;
+  secondaryCategory: string | null;
+  categoryType: CategoryType;
+}) {
+  const primary = input.primaryCategory.trim();
+  if (!primary) {
+    throw new Error("Category name is required.");
+  }
+  const secondary = input.secondaryCategory?.trim() || null;
+
+  const supabase = await createServerSupabaseClient();
+  await createCategory(supabase, input.projectId, input.month, primary, secondary, input.categoryType);
+  revalidatePath("/budget");
+  revalidatePath("/settings/categories");
+}
+
+/** Decision 5 — renames a category from `month` onward; earlier months keep the old name. */
+export async function renameCategoryAction(input: {
+  projectId: string;
+  month: string;
+  oldPrimaryCategory: string;
+  oldSecondaryCategory: string | null;
+  newPrimaryCategory: string;
+  newSecondaryCategory: string | null;
+}) {
+  const newPrimary = input.newPrimaryCategory.trim();
+  if (!newPrimary) {
+    throw new Error("Category name is required.");
+  }
+  const newSecondary = input.newSecondaryCategory?.trim() || null;
+
+  const supabase = await createServerSupabaseClient();
+  await renameCategory(
+    supabase,
+    input.projectId,
+    input.month,
+    input.oldPrimaryCategory,
+    input.oldSecondaryCategory,
+    newPrimary,
+    newSecondary
+  );
+  revalidatePath("/budget");
+  revalidatePath("/settings/categories");
+}
+
+/** Decision 5 — archives a category (flags the Category Master row only); every real
+ *  monthly row, including the currently viewed month's, is left untouched. */
+export async function archiveCategoryAction(input: { projectId: string; primaryCategory: string; secondaryCategory: string | null }) {
+  const supabase = await createServerSupabaseClient();
+  await archiveCategory(supabase, input.projectId, input.primaryCategory, input.secondaryCategory);
+  revalidatePath("/budget");
+  revalidatePath("/settings/categories");
 }

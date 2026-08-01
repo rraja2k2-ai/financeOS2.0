@@ -34,7 +34,7 @@ export function CategoriesView({ categories }: { categories: CategoryGroup[] }) 
       )}
 
       <p className="mt-4 rounded-[var(--radius-md)] border border-dashed border-border p-3.5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
-        Read-only view derived from categorization rules. Editing isn&apos;t wired up yet.
+        Read-only reference. Categories are created, renamed, and archived from Budget.
       </p>
     </div>
   );
