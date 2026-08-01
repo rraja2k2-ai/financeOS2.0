@@ -15,14 +15,31 @@ export async function getById(supabase: SupabaseClient, id: string): Promise<Acc
   return data;
 }
 
+/** Ordered by display_order (Decision 7) — the single choke point every caller already
+ *  goes through (Dashboard, Accounts, Capture, Activity's account filter), so ordering
+ *  here is the one place that guarantees the same order everywhere, not duplicated per
+ *  consumer. Nulls last: an account never explicitly reordered simply falls to the end. */
 export async function list(supabase: SupabaseClient): Promise<Account[]> {
-  const { data, error } = await supabase.from("accounts").select("*");
+  const { data, error } = await supabase.from("accounts").select("*").order("display_order", { ascending: true, nullsFirst: false });
 
   if (error) {
     throw error;
   }
 
   return data || [];
+}
+
+/** Persists a full reordering (Decision 7's drag/arrow reorder) — `orderedIds` is the
+ *  complete new top-to-bottom order; each account's display_order becomes its 1-based
+ *  position. Small account count (a personal single-user app) makes N sequential updates
+ *  simpler and safer than a bulk upsert RPC — no new stored procedure needed. */
+export async function reorder(supabase: SupabaseClient, orderedIds: string[]): Promise<void> {
+  for (let i = 0; i < orderedIds.length; i++) {
+    const { error } = await supabase.from("accounts").update({ display_order: i + 1 }).eq("id", orderedIds[i]);
+    if (error) {
+      throw error;
+    }
+  }
 }
 
 export async function insert(supabase: SupabaseClient, account: Omit<Account, "id" | "created_at" | "updated_at">): Promise<Account> {

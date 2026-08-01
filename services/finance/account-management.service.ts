@@ -21,9 +21,13 @@ export type AccountInput = {
   notes: string;
 };
 
+/** Decision 3 (Master Data & Account Management Refactor) — Opening Balance is editable
+ *  only at creation; every field an Edit Account submission can actually change. */
+export type AccountUpdateInput = Omit<AccountInput, "openingBalance">;
+
 /** Shared by create and update — same rules apply to both (§5: blank names, invalid
  *  balances, duplicate names are all checked before either ever reaches the repository). */
-function validateInput(input: AccountInput): { name: string; balance: number } {
+function validateCommonInput(input: Pick<AccountInput, "accountName" | "accountType" | "currency">): { name: string } {
   const name = input.accountName.trim();
   if (!name) {
     throw new Error("Account name is required.");
@@ -34,22 +38,29 @@ function validateInput(input: AccountInput): { name: string; balance: number } {
   if (!ALL_CURRENCIES.includes(input.currency)) {
     throw new Error("Select a supported currency.");
   }
+  return { name };
+}
+
+/** Opening Balance is only ever parsed/validated at creation (Decision 3) — updateAccount
+ *  no longer accepts it at all, so there is no "which value wins" ambiguity to guard against. */
+function parseOpeningBalance(openingBalance: string): number {
   // String() guards against a caller passing the Account row's own opening_balance back
-  // in (e.g. an Edit form seeded from an existing account) — Postgres/PostgREST returns
-  // that column as a JSON number despite the Account domain type declaring it `string`.
-  const openingBalanceStr = String(input.openingBalance ?? "").trim();
+  // in (e.g. a form seeded from an existing account) — Postgres/PostgREST returns that
+  // column as a JSON number despite the Account domain type declaring it `string`.
+  const openingBalanceStr = String(openingBalance ?? "").trim();
   const balance = Number(openingBalanceStr);
   if (openingBalanceStr === "" || !Number.isFinite(balance)) {
     throw new Error("Opening balance must be a number.");
   }
-  return { name, balance };
+  return balance;
 }
 
 /** New accounts start with no transactions, so Current Balance == Opening Balance at
  *  creation time — nothing in the app recalculates current_balance from transactions
  *  (it's an independently maintained field), so this is the only place it's ever set. */
 export async function createAccount(supabase: SupabaseClient, input: AccountInput): Promise<Account> {
-  const { name, balance } = validateInput(input);
+  const { name } = validateCommonInput(input);
+  const balance = parseOpeningBalance(input.openingBalance);
 
   if (await accountRepository.existsByName(supabase, name)) {
     throw new Error(`An account named "${name}" already exists.`);
@@ -63,13 +74,18 @@ export async function createAccount(supabase: SupabaseClient, input: AccountInpu
     current_balance: String(balance),
     status: "Active",
     notes: input.notes.trim() || null,
+    // New accounts append to the end of the display order (Decision 7) — null falls
+    // last per account.repository.ts's list() ordering until the user reorders it.
+    display_order: null,
   });
 }
 
-/** Current Balance and status are intentionally absent — not editable fields per spec;
- *  Archive/Restore below own status, and current_balance is never user-editable here. */
-export async function updateAccount(supabase: SupabaseClient, id: string, input: AccountInput): Promise<Account> {
-  const { name, balance } = validateInput(input);
+/** Current Balance, Opening Balance, and status are intentionally absent — not editable
+ *  fields here (Decision 3: Opening Balance is creation-only, historical afterwards;
+ *  Archive/Restore below own status; current_balance is never user-editable anywhere —
+ *  see balance-correction.service.ts for the one sanctioned way to change it). */
+export async function updateAccount(supabase: SupabaseClient, id: string, input: AccountUpdateInput): Promise<Account> {
+  const { name } = validateCommonInput(input);
 
   if (await accountRepository.existsByName(supabase, name, id)) {
     throw new Error(`An account named "${name}" already exists.`);
@@ -79,7 +95,6 @@ export async function updateAccount(supabase: SupabaseClient, id: string, input:
     account_name: name,
     account_type: input.accountType,
     currency: input.currency,
-    opening_balance: String(balance),
     notes: input.notes.trim() || null,
   });
 }

@@ -6,7 +6,7 @@ const SETTINGS_ITEMS = [
   { href: "/settings/ai", label: "AI", description: "Open the Capture Inbox" },
   { href: "/settings/appearance", label: "Appearance", description: "System, Dark, or Light theme" },
   { href: "/settings/general", label: "General", description: "Base currency" },
-  { href: "/settings/categories", label: "Categories", description: "Categorization taxonomy" },
+  { href: "/settings/categories", label: "Categories", description: "Read-only reference — manage in Budget" },
   { href: "/settings/accounts", label: "Accounts", description: "Your linked accounts" },
   { href: "/settings/exchange-rates", label: "Exchange Rates", description: "Manage conversion rates" },
   { href: "/settings/data-management", label: "Data Management", description: "Export, reports, import" },

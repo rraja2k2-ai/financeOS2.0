@@ -21,8 +21,14 @@
  *   REFUND     -> source  +amount (reverses a prior Expense)
  *   TRANSFER   -> source −amount, target +amount (external Transfer has no target —
  *                 no Receivable/Payable account type exists to post the other side to)
- *   ADJUSTMENT -> source +amount only — amounts are validated non-negative everywhere,
- *                 so a downward adjustment isn't expressible today; not invented here
+ *   ADJUSTMENT -> source ±amount, SIGNED by the header's own sgd_total_amount (Master
+ *                 Data & Account Management Refactor, Decision 2). Every other type here
+ *                 is unsigned by construction — EXPENSE always debits, INCOME always
+ *                 credits — but ADJUSTMENT's whole purpose is an arbitrary correction in
+ *                 either direction, so its sign IS the semantic content. Only the
+ *                 system-generated Correct Balance flow (balance-correction.service.ts)
+ *                 ever produces a negative sgd_total_amount; ordinary Capture/Review
+ *                 amounts stay non-negative (validateForType), unaffected by this.
  *
  * Every delta is computed in the AFFECTED account's own currency (converting the
  * header's sgd_total_amount via exchange.service.ts's existing rate table, reversed) —
@@ -61,7 +67,8 @@ export async function computePostingDeltas(
   header: PostingHeader,
   currencyById: Map<string, string>
 ): Promise<PostingDelta[]> {
-  const sgdAmount = Math.abs(Number(header.sgd_total_amount));
+  const rawSgdAmount = Number(header.sgd_total_amount);
+  const sgdAmount = Math.abs(rawSgdAmount);
   if (sgdAmount === 0) return [];
 
   const deltas: PostingDelta[] = [];
@@ -86,7 +93,7 @@ export async function computePostingDeltas(
       await push(header.target_account_id, 1);
       break;
     case TRANSACTION_TYPES.ADJUSTMENT:
-      await push(header.source_account_id, 1);
+      await push(header.source_account_id, rawSgdAmount >= 0 ? 1 : -1);
       break;
     default:
       break;
