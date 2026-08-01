@@ -65,6 +65,14 @@ export function merchantRequiredFor(type: TransactionType): boolean {
   return type === TRANSACTION_TYPES.EXPENSE || type === TRANSACTION_TYPES.REFUND;
 }
 
+/** Every type except ADJUSTMENT records a real receipt/line-item total, which is never
+ *  negative. ADJUSTMENT's amount IS the signed balance-correction difference (see
+ *  balance-correction.service.ts and account-posting.service.ts's signed ADJUSTMENT
+ *  rule) — a negative value there is a legitimate downward correction, not bad input. */
+export function amountsCanBeNegativeFor(type: TransactionType): boolean {
+  return type === TRANSACTION_TYPES.ADJUSTMENT;
+}
+
 /**
  * Transaction Type Finalization — merchant is reused for every type (no new column), but
  * an Internal Transfer (destination resolves to one of the user's own accounts) needs no
@@ -277,7 +285,12 @@ export function validateForType(reviewed: ReviewedCapture): string[] {
   const errors: string[] = [];
   if (merchantRequiredFor(reviewed.header.transactionType) && !reviewed.header.merchant.trim()) errors.push("Merchant cannot be empty.");
   if (reviewed.items.length === 0) errors.push("At least one line item is required.");
-  if (reviewed.items.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) errors.push("Amounts cannot be negative.");
+  if (
+    !amountsCanBeNegativeFor(reviewed.header.transactionType) &&
+    reviewed.items.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)
+  ) {
+    errors.push("Amounts cannot be negative.");
+  }
   return errors;
 }
 
