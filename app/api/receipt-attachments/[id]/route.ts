@@ -22,23 +22,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   try {
     const supabase = await createServerSupabaseClient();
-    const updated = await receiptAttachmentRepository.update(supabase, id, { keep_attachment: body.keepAttachment });
-    // TEMPORARY diagnostic logging (Keep Attachment flicker investigation) — remove once
-    // the root cause is confirmed against the live deployment (check Vercel function logs).
-    console.log("[receipt-attachments/:id] PATCH ok", { id, requested: body.keepAttachment, rowReturned: updated?.keep_attachment });
+    await receiptAttachmentRepository.update(supabase, id, { keep_attachment: body.keepAttachment });
     return NextResponse.json({ updated: true });
   } catch (err) {
-    // Logs the RAW error (not just a generic message) — if this is still an RLS policy
-    // gap, Postgres/PostgREST's own message ("new row violates row-level security
-    // policy...") will appear here in Vercel's function logs.
     console.error("[receipt-attachments/:id] PATCH failed:", { id, requested: body.keepAttachment, err });
-
-    // TEMPORARY (Keep Attachment flicker investigation): surface the raw Postgres/
-    // PostgREST error details in the response itself, not just server logs, since Vercel
-    // function logs aren't always at hand. Remove this detail field once root-caused —
-    // a generic message is the right long-term behavior for a client-facing error.
-    const e = err as { message?: string; details?: string; hint?: string; code?: string } | null;
-    const detail = e ? [e.code, e.message, e.details, e.hint].filter(Boolean).join(" | ") : String(err);
-    return NextResponse.json({ error: "Couldn't update this attachment. Try again.", detail }, { status: 500 });
+    return NextResponse.json({ error: "Couldn't update this attachment. Try again." }, { status: 500 });
   }
 }

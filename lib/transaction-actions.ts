@@ -51,19 +51,12 @@ export async function setKeepAttachmentRequest(attachmentId: string, keepAttachm
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ keepAttachment }),
     });
-    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string; updated?: boolean } | null;
-    // TEMPORARY diagnostic logging (Keep Attachment flicker investigation) — remove once
-    // the root cause is confirmed in the browser console against the live deployment.
-    console.log("[setKeepAttachmentRequest]", { attachmentId, keepAttachment, status: res.status, ok: res.ok, body });
+    const body = (await res.json().catch(() => null)) as { error?: string; updated?: boolean } | null;
     if (!res.ok) {
-      const base = body?.error ?? "Couldn't update this attachment. Try again.";
-      // TEMPORARY: `detail` carries the raw Postgres/PostgREST error text so it's visible
-      // right in the toast/console, not just Vercel's function logs.
-      return { ok: false, error: body?.detail ? `${base} — ${body.detail}` : `${base} (HTTP ${res.status})` };
+      return { ok: false, error: body?.error ?? "Couldn't update this attachment. Try again." };
     }
     return { ok: true };
-  } catch (err) {
-    console.log("[setKeepAttachmentRequest] network/throw error:", err);
+  } catch {
     return { ok: false, error: "Couldn't reach the server. Try again." };
   }
 }
