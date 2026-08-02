@@ -164,6 +164,34 @@ project, and monitor accounts and investments.
   same convention Projects already uses; there is no separate "Archived"
   status value and no schema change for it). Do not reintroduce either
   field or a new status value without a fresh decision.
+- **`accounts.opening_balance` is creation-only and permanently historical**
+  (Master Data & Account Management Refactor) — `AccountUpdateInput` never
+  accepts it, so Edit Account cannot touch it after creation. **The one
+  sanctioned way to change `current_balance` is Adjust/Correct Balance**
+  (`services/finance/balance-correction.service.ts`): it never writes
+  `current_balance` directly, instead computing the signed difference and
+  saving a normal, system-generated `ADJUSTMENT` transaction through the
+  same save path every other transaction uses, posted through the Account
+  Posting Engine (`account-posting.service.ts`) like any other transaction.
+  A **reason is mandatory** (v1.8.0) — it becomes the transaction's
+  `merchant`/reference text (visible in Activity), not just an internal
+  note; the previous→new balance summary itself lives in `comments`
+  (stored, not surfaced in any UI today). The one shared
+  `components/accounts/CorrectBalanceForm.tsx` component (never
+  duplicated) is opened from Settings → Accounts → Edit → "Correct
+  Balance" and from Account Detail's own "Adjust Balance" header action —
+  two entry points into one workflow, matching §7's "one shared workflow"
+  pattern already established for the Review Screen.
+- **`accounts.display_order`** (migration 024) is a persistent,
+  user-controlled ordering, nullable (null sorts last). Every consumer
+  gets it "for free" because `account.repository.ts`'s `list()` is the
+  **single ordering choke point** — it orders by `display_order` once, and
+  every caller (Accounts, Account Detail, Dashboard, Capture's master
+  data, the Review Screen's Account/Destination pickers) simply preserves
+  that array order rather than re-sorting. Up/Down arrows
+  (`reorderAccountsAction`) live in Settings → Accounts Management; do not
+  add a second reordering UI or a second place that re-sorts accounts by
+  name — extend this one choke point instead.
 - `account_mapping_rules` is a **separate table from `categorization_rules`**
   and must stay separate. `categorization_rules` maps merchant text →
   category (and carries a category-specific account hint).
@@ -265,8 +293,32 @@ project, and monitor accounts and investments.
     defines categories. `is_archived` on a `CATEGORY_MASTER` row retires a
     category (removed from Capture/Review/Budget's "add category" list and
     from future-month cloning) without touching any historical `MONTHLY`
-    row. Budget is the only place `CATEGORY_MASTER` rows are created,
-    renamed, or archived.
+    row. **Budget is the only place `CATEGORY_MASTER` rows are created,
+    renamed, archived, or restored** (Create/Rename/Archive/Restore all
+    live in `services/finance/budget.service.ts`; Restore is v1.8.0's
+    explicit counterpart to Archive — createCategory already silently
+    revived an archived pair re-typed with the exact same name, but Restore
+    gives that its own first-class action instead of relying on that side
+    effect). Settings → Categories (`app/settings/categories/page.tsx`)
+    stays a **read-only reference page** reading this same set — it has no
+    create/rename/archive/restore affordance of its own, so there remains
+    exactly one category management workflow, not two (reviewed again in
+    v1.8.0; this is a deliberate, settled decision — do not add management
+    actions there without a fresh decision to change it). Add Category's
+    Primary/Secondary fields each offer a picker of existing (non-archived)
+    names alongside a "+ New" free-text option (v1.8.0 Budget UX), so a new
+    pairing can reuse an established name instead of risking a near-duplicate
+    free-text entry; archived names are excluded from these pickers on
+    purpose (reviving one goes through Restore, not an implicit retype).
+    **One-time/temporary budgets (a home renovation, a wedding, a trip) are
+    deliberately modeled as Projects, not as one-time Categories** —
+    reviewed in v1.8.0: Projects already have their own `LIFETIME` budget
+    envelope (`services/finance/project.service.ts`), their own lifecycle
+    (Active/Inactive, no monthly cloning), and their own analytics/drill-down
+    page, which is exactly what a one-off budget needs; a parallel
+    "one-time Category" concept would duplicate that mechanism inside the
+    Generic project's permanent category taxonomy for no added benefit. Do
+    not introduce one-time/temporary Categories — create a Project instead.
 
 ---
 
@@ -682,6 +734,38 @@ transaction system of record, RLS with granular per-verb policies.
   extend one component instead of restructuring the Review Screen. No
   Transaction Types, receipt-image display, or line-item add/delete were
   introduced — explicitly out of scope for this milestone.
+- **Master Data & Account Management Refactor** — Correct/Adjust Balance
+  (see §4's `opening_balance`/`display_order` bullet) replaced any notion
+  of directly editing `current_balance`: Opening Balance locked read-only
+  after creation, and the only way to change Current Balance became a
+  system-generated `ADJUSTMENT` transaction through the normal save +
+  Posting Engine path. Accounts gained a persistent `display_order`
+  (migration 024), ordered at the single `account.repository.ts` choke
+  point so every consumer stays consistent automatically. Settings →
+  Accounts Management gained full CRUD (Add/Edit/Archive/Restore/Delete)
+  with duplicate-name and balance validation.
+- **Category Master architecture** — `project_budgets.row_type` became the
+  structural discriminator separating `MONTHLY`/`LIFETIME`/`CATEGORY_MASTER`
+  rows in one shared table (see §4). Budget became the sole place
+  categories are created/renamed/archived; Settings → Categories became a
+  read-only reference page reading the same Category Master set.
+- **v1.8.0 Account & Budget UX** — Adjust Balance is now also reachable
+  directly from Account Detail (`/accounts/[id]`'s header action), sharing
+  one `CorrectBalanceForm` component with Settings' Edit dialog (no second
+  implementation); the workflow now requires a mandatory Reason, which
+  becomes the Adjustment transaction's visible reference text (see §4).
+  Account mutation actions (`app/settings/accounts/actions.ts`) now also
+  revalidate `/` so Dashboard's Net Cash reflects every account change,
+  not just a reorder. Category Master gained an explicit Restore action
+  (`restoreCategory`/`restoreCategoryAction`) with an Archived Categories
+  list in Budget, and Add Category's Primary/Secondary fields gained
+  existing-name pickers alongside free-text "+ New" entry (see §4). This
+  milestone was scoped as UX/workflow only — Account ordering-in-every-picker
+  and the Category Master management model were both verified already
+  complete from the two undocumented milestones above (a genuine CLAUDE.md
+  staleness this milestone also fixed) rather than re-implemented. Reviewed
+  and rejected: one-time/temporary Categories (Home Renovation, Europe
+  Trip, Wedding, etc.) — Projects already solve this; see §4.
 
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.

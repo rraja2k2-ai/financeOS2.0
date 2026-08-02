@@ -19,6 +19,9 @@ function revalidateAccountPaths(id?: string) {
   revalidatePath("/settings/accounts");
   revalidatePath("/accounts");
   if (id) revalidatePath(`/accounts/${id}`);
+  // Dashboard's Net Cash card reads account balances too — every account mutation
+  // (edit/archive/restore/delete/adjust) needs to invalidate it, not just reorder.
+  revalidatePath("/");
 }
 
 export async function createAccountAction(input: AccountInput) {
@@ -57,10 +60,11 @@ export async function deleteAccountAction(id: string) {
 
 /** Decision 1/2 — the one sanctioned way to change Current Balance: builds and posts a
  *  system-generated ADJUSTMENT transaction through the normal save + Posting Engine path
- *  (see balance-correction.service.ts). Never writes current_balance directly. */
-export async function correctAccountBalanceAction(accountId: string, newBalance: number): Promise<Account> {
+ *  (see balance-correction.service.ts). Never writes current_balance directly. `reason`
+ *  is mandatory (v1.8.0 Account Balance Adjustment). */
+export async function correctAccountBalanceAction(accountId: string, newBalance: number, reason: string): Promise<Account> {
   const supabase = await createServerSupabaseClient();
-  await correctAccountBalance(supabase, accountId, newBalance);
+  await correctAccountBalance(supabase, accountId, newBalance, reason);
   const account = await accountRepository.getById(supabase, accountId);
   revalidateAccountPaths(accountId);
   revalidatePath("/activity");

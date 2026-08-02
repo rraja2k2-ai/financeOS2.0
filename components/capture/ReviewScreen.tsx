@@ -7,7 +7,7 @@ import { currencyPrefix } from "@/lib/currency";
 import { formatCapturedAt } from "@/components/activity/activity-format";
 import { BASE_CURRENCIES, SUPPORTED_TARGET_CURRENCIES } from "@/domain/exchange-rate";
 import type { CaptureMasterData, CaptureReceiptResult } from "@/services/ai/ai-provider";
-import { merchantRequiredFor, type ReviewedCapture } from "@/services/capture/save-capture.service";
+import { merchantRequiredFor, amountsCanBeNegativeFor, type ReviewedCapture } from "@/services/capture/save-capture.service";
 import { reviewedFromResult } from "@/services/capture/reviewed-from-result";
 import { TransactionItemRow, qtyIsNegative, type ItemDraft } from "@/components/capture/TransactionItemRow";
 import { ALL_TRANSACTION_TYPES, MERCHANT_FIELD_LABELS, TRANSACTION_TYPE_LABELS, TRANSACTION_TYPES, type TransactionType } from "@/constants/transaction-types";
@@ -232,7 +232,11 @@ export function ReviewScreen({
     const errors: string[] = [];
     if (merchantRequiredFor(headerDraft.transactionType) && !headerDraft.merchant.trim()) errors.push("Merchant cannot be empty.");
     if (itemDrafts.length === 0) errors.push("At least one line item is required.");
-    if (itemDrafts.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)) errors.push("Amounts cannot be negative.");
+    if (
+      !amountsCanBeNegativeFor(headerDraft.transactionType) &&
+      itemDrafts.some((i) => i.amount.trim() !== "" && Number(i.amount) < 0)
+    )
+      errors.push("Amounts cannot be negative.");
     if (itemDrafts.some((i) => qtyIsNegative(i.qty))) errors.push("Quantities cannot be negative.");
     if (taxDraft.trim() !== "" && Number(taxDraft) < 0) errors.push("Tax cannot be negative.");
     if (discountDraft.trim() !== "" && Number(discountDraft) < 0) errors.push("Discount cannot be negative.");

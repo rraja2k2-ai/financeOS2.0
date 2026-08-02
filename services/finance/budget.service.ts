@@ -353,3 +353,22 @@ export async function archiveCategory(
   }
   await projectBudgetRepository.update(supabase, master.id, { is_archived: true });
 }
+
+/** Restores a previously archived category (v1.8.0) — the explicit counterpart to
+ *  archiveCategory, flagging the Category Master row active again so it's immediately
+ *  offered again in Capture/Review/Budget's "add category" list and copied into future
+ *  months. (createCategory already revived a re-typed archived pair implicitly; this
+ *  gives that same effect its own first-class action instead of relying on that side
+ *  effect.) No real monthly row is touched — matches archiveCategory's own scope. */
+export async function restoreCategory(
+  supabase: SupabaseClient,
+  projectId: string,
+  primary: string,
+  secondary: string | null
+): Promise<void> {
+  const master = await projectBudgetRepository.getCategoryMasterRow(supabase, projectId, primary, secondary);
+  if (!master) {
+    throw new CategoryNotFoundError(`"${secondary ? `${primary} / ${secondary}` : primary}" doesn't exist.`);
+  }
+  await projectBudgetRepository.update(supabase, master.id, { is_archived: false });
+}
