@@ -26,7 +26,18 @@ function barColor(pct: number | null): string {
   return "bg-primary";
 }
 
-export function ProjectDetailView({ project, detail }: { project: Project; detail: ProjectDetail }) {
+export function ProjectDetailView({
+  project,
+  detail,
+  categoryOptions,
+}: {
+  project: Project;
+  detail: ProjectDetail;
+  /** Expense-type category names from Category Master, not already budgeted on this
+   *  project — powers Add Category; Category Master is the one source of truth, same
+   *  list Capture/Review/Budget already read (see app/projects/[id]/page.tsx). */
+  categoryOptions: string[];
+}) {
   const generic = isGenericProject(project);
   const isFixed = project.budget_type === "Fixed";
 
@@ -62,6 +73,7 @@ export function ProjectDetailView({ project, detail }: { project: Project; detai
             categories={detail.categories}
             transactionsByCategory={detail.transactionsByCategory}
             isFixed={isFixed}
+            categoryOptions={categoryOptions}
           />
 
           <PlaceholderSection title="Timeline" note="Project timeline & duration view — coming soon." />
@@ -118,21 +130,33 @@ function CategorySummarySection({
   categories,
   transactionsByCategory,
   isFixed,
+  categoryOptions,
 }: {
   projectId: string;
   currency: string;
   categories: ProjectCategorySummary[];
   transactionsByCategory: Record<string, ProjectCategoryTransaction[]>;
   isFixed: boolean;
+  categoryOptions: string[];
 }) {
+  const budgetedNames = new Set(categories.map((c) => c.primaryCategory));
+  const availableOptions = categoryOptions.filter((name) => !budgetedNames.has(name));
+
   return (
     <section className="mb-6">
       <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Category summary</p>
 
       {categories.length === 0 ? (
-        <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center text-[12.5px] text-muted-foreground">
-          No spending or budgets in this project yet.
-        </div>
+        isFixed && availableOptions.length > 0 ? (
+          <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center">
+            <p className="mb-3 text-[12.5px] text-muted-foreground">No category budgets yet.</p>
+            <AddCategoryBudget projectId={projectId} currency={currency} options={availableOptions} label="+ Add Category Budget" />
+          </div>
+        ) : (
+          <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center text-[12.5px] text-muted-foreground">
+            No spending or budgets in this project yet.
+          </div>
+        )
       ) : (
         <div className="space-y-2.5">
           {categories.map((cat) => (
@@ -145,9 +169,118 @@ function CategorySummarySection({
               isFixed={isFixed}
             />
           ))}
+          {isFixed && availableOptions.length > 0 && (
+            <AddCategoryBudget projectId={projectId} currency={currency} options={availableOptions} label="+ Add Category Budget" />
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+/** Bootstraps a category into a project's budget before it has any spend or existing
+ *  budget line — the one missing entry point (everything past this reuses the existing
+ *  saveProjectCategoryBudgetAction create/update path CategoryCard already exercises). */
+function AddCategoryBudget({
+  projectId,
+  currency,
+  options,
+  label,
+}: {
+  projectId: string;
+  currency: string;
+  options: string[];
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState("");
+  const [amount, setAmount] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
+
+  function handleAdd() {
+    setError(null);
+    const parsed = Number(amount);
+    if (!category) {
+      setError("Choose a category.");
+      return;
+    }
+    if (amount === "" || Number.isNaN(parsed) || parsed <= 0) {
+      setError("Enter a budget amount greater than zero.");
+      return;
+    }
+    startTransition(async () => {
+      try {
+        await saveProjectCategoryBudgetAction({ budgetLineId: null, projectId, primaryCategory: category, currency, amount: parsed });
+        setOpen(false);
+        setCategory("");
+        setAmount("");
+        router.refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not add the category budget.");
+      }
+    });
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full rounded-[var(--radius-lg)] border border-dashed border-border p-4 text-center text-[12.5px] font-semibold text-primary"
+      >
+        {label}
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-border bg-card p-3.5">
+      <div className="flex items-center gap-2">
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          autoFocus
+          className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[12.5px] outline-none focus:border-primary"
+        >
+          <option value="">Category</option>
+          {options.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <span className="text-[10.5px] text-muted-foreground">{currency}</span>
+        <input
+          type="number"
+          inputMode="decimal"
+          step="0.01"
+          min="0"
+          placeholder="0.00"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          className="w-20 rounded-md border border-border bg-background px-1.5 py-1.5 text-right font-mono text-[12.5px] tabular-nums outline-none focus:border-primary"
+        />
+      </div>
+      {error && <p className="mt-2 text-[11.5px] font-semibold text-destructive">{error}</p>}
+      <div className="mt-2.5 flex gap-2">
+        <button type="button" onClick={handleAdd} disabled={pending} className="flex-1 rounded-md bg-primary py-1.5 text-[12px] font-semibold text-primary-foreground disabled:opacity-50">
+          {pending ? "Adding…" : "Add"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            setError(null);
+          }}
+          disabled={pending}
+          className="flex-1 rounded-md border border-border py-1.5 text-[12px] font-semibold disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 

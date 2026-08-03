@@ -127,6 +127,15 @@ export async function saveProjectCategoryBudgetAction(input: {
   if (input.budgetLineId) {
     await projectBudgetRepository.update(supabase, input.budgetLineId, fields);
   } else {
+    // Friendly guard for what the DB's unique index (project_budgets_month_project_category_uk,
+    // migration 004) would otherwise reject with a raw constraint-violation error — this
+    // category may already have a LIFETIME row for this project (e.g. Add Category picked a
+    // name that's stale by the time of submit).
+    const existing = await projectBudgetRepository.listLifetimeByProject(supabase, input.projectId);
+    if (existing.some((b) => b.primary_category === input.primaryCategory)) {
+      throw new Error(`"${input.primaryCategory}" already has a budget for this project.`);
+    }
+
     await projectBudgetRepository.insert(supabase, {
       project_id: input.projectId,
       budget_month: PROJECT_BUDGET_MONTH,
