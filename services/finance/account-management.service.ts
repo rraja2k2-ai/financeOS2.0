@@ -5,6 +5,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as accountRepository from "@/repositories/account.repository";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
+import * as recurringRuleRepository from "@/repositories/recurring-rule.repository";
 import type { Account } from "@/domain/account";
 import { ACCOUNT_TYPES, type AccountType } from "@/constants/accounts";
 import { ALL_CURRENCIES } from "@/domain/exchange-rate";
@@ -12,6 +13,11 @@ import { ALL_CURRENCIES } from "@/domain/exchange-rate";
 /** Thrown by deleteAccount when the account has transaction history — callers show its
  *  message verbatim rather than a generic failure, so the user knows to Archive instead. */
 export class AccountHasTransactionsError extends Error {}
+
+/** Thrown by deleteAccount when an active recurring rule still references this account —
+ *  distinct from AccountHasTransactionsError because a brand-new rule (no occurrences
+ *  generated yet) can hit this with zero transaction history to catch it otherwise. */
+export class AccountHasRecurringRulesError extends Error {}
 
 export type AccountInput = {
   accountName: string;
@@ -112,11 +118,18 @@ export async function restoreAccount(supabase: SupabaseClient, id: string): Prom
 }
 
 /** Blocks permanent deletion if the account has any transaction history (as source or
- *  target); Archive is always the safe alternative regardless of transaction history. */
+ *  target), or if an active recurring rule still references it (as source or target) —
+ *  a rule can reference an account with zero transactions ever generated, so the
+ *  transaction-history check alone can't catch it. Archive is always the safe
+ *  alternative in both cases. */
 export async function deleteAccount(supabase: SupabaseClient, id: string): Promise<void> {
   const hasTransactions = await transactionHeaderRepository.existsForAccountId(supabase, id);
   if (hasTransactions) {
     throw new AccountHasTransactionsError("This account contains transactions and cannot be deleted. Archive it instead.");
+  }
+  const hasActiveRecurringRules = await recurringRuleRepository.existsActiveForAccountId(supabase, id);
+  if (hasActiveRecurringRules) {
+    throw new AccountHasRecurringRulesError("This account is used by an active recurring rule and cannot be deleted. Archive it instead, or deactivate the recurring rule first.");
   }
   await accountRepository.remove(supabase, id);
 }

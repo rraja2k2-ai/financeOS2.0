@@ -271,6 +271,46 @@ project, and monitor accounts and investments.
   tracking for the external case, and account balance posting
   (`accounts.current_balance` is still never updated by any transaction).
 
+- **`recurring_rules` is the single table for Recurring Transactions**
+  (migration 026). A row is a **living template, not historical data** —
+  editing it (merchant/amount/category/account/project/comments/frequency/
+  end condition) only ever changes future-generated transactions; every
+  already-generated transaction is an ordinary, independent
+  `transaction_headers` row and never changes retroactively. Generation is
+  **entirely manual** — no cron, no background job, no scheduled function —
+  a single "Generate Recurring Transactions" action (Settings → Recurring
+  Transactions) walks every `ACTIVE` rule whose `next_due_date` is due (up
+  to today by default; a custom date is offered only as a collapsed
+  recovery option for catching up missed months) and creates each
+  occurrence through the existing `transactionService.createTransaction()`
+  — posted through the normal Account Posting Engine exactly like any
+  other transaction; recurring generation is not a second posting engine.
+  `next_due_date` is the **sole** progress cursor, advanced immediately
+  after each individual generated transaction (never batched) — there is
+  deliberately **no `recurring_rule_id`** column on `transaction_headers`
+  linking a generated transaction back to its rule; duplicate-prevention
+  and "what's next" rest entirely on `next_due_date`, and a generated
+  transaction is simply an ordinary transaction from the instant it
+  exists, indistinguishable from a manually entered one. `start_date` is
+  immutable after creation — it's the clamp anchor for month/year
+  recurrence math (`advanceDueDate()` in `services/finance/
+  recurring-rule.service.ts`, the one implementation of the
+  interval-stepping logic, reused by both generation and "After N
+  Occurrences" end-date resolution). Rules support **single-line
+  transactions only** — a rule's own category/amount map directly to one
+  generated line item; multi-line recurring transactions are out of scope.
+  A failed occurrence (validation, missing exchange rate, deleted account,
+  posting failure) stops generation for that rule only, leaving
+  `next_due_date` at the failed occurrence for the next run to retry —
+  other rules in the same run are unaffected. Deleting an account
+  referenced by an `ACTIVE` rule is blocked (`account-management.service.ts`),
+  mirroring the existing transaction-history delete guard. "Make
+  Recurring" (Review Screen) is the only creation path — merchant,
+  category, account(s), project, and comments are inherited from the
+  transaction's header (a multi-item transaction's header-level
+  `primary_category` and total, never itemized detail); the recurring
+  rule form only asks for frequency and end condition.
+
 - **`project_budgets` is the single budget table, reused for three distinct
   concerns via `row_type`, its one row discriminator** (`CHECK` constraint —
   `MONTHLY`, `LIFETIME`, `CATEGORY_MASTER` — migration 025). `row_type` is
@@ -766,6 +806,15 @@ transaction system of record, RLS with granular per-verb policies.
   staleness this milestone also fixed) rather than re-implemented. Reviewed
   and rejected: one-time/temporary Categories (Home Renovation, Europe
   Trip, Wedding, etc.) — Projects already solve this; see §4.
+- **Recurring Transactions** — `recurring_rules` (see §4), Settings →
+  Recurring Transactions (`/settings/recurring`) as the sole management
+  surface (list showing Merchant/Amount/Frequency/Next Due/Status, with
+  Edit/Activate-Deactivate/Delete), and "Make Recurring" on the Review
+  Screen as the sole creation path. Deliberately excluded from this
+  milestone, not future-proofed for: notifications/reminders,
+  forecasting, multi-line recurring transactions, a `recurring_rule_id`
+  link on generated transactions, and any automatic (cron/background)
+  generation.
 
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.
