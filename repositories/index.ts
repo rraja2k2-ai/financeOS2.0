@@ -12,3 +12,4 @@ export * as investmentEventRepository from "./investment-event.repository";
 export * as investmentAccountSummaryRepository from "./investment-account-summary.repository";
 export * as investmentSnapshotRepository from "./investment-snapshot.repository";
 export * as projectBudgetRepository from "./project-budget.repository";
+export * as recurringRuleRepository from "./recurring-rule.repository";

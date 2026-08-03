@@ -8,6 +8,7 @@ const SETTINGS_ITEMS = [
   { href: "/settings/general", label: "General", description: "Base currency" },
   { href: "/settings/categories", label: "Categories", description: "Read-only reference — manage in Budget" },
   { href: "/settings/accounts", label: "Accounts", description: "Your linked accounts" },
+  { href: "/settings/recurring", label: "Recurring Transactions", description: "Manage recurring bills and transfers" },
   { href: "/settings/exchange-rates", label: "Exchange Rates", description: "Manage conversion rates" },
   { href: "/settings/data-management", label: "Data Management", description: "Export, reports, import" },
   { href: "/settings/about", label: "About", description: "App information" },

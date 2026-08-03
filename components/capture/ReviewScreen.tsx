@@ -13,6 +13,7 @@ import { TransactionItemRow, qtyIsNegative, type ItemDraft } from "@/components/
 import { ALL_TRANSACTION_TYPES, MERCHANT_FIELD_LABELS, TRANSACTION_TYPE_LABELS, TRANSACTION_TYPES, type TransactionType } from "@/constants/transaction-types";
 import { fetchReceiptPagesRequest } from "@/lib/transaction-actions";
 import { ReceiptViewer, type ReceiptViewerPage } from "@/components/activity/ReceiptViewer";
+import { MakeRecurringModal } from "@/components/recurring/MakeRecurringModal";
 
 /**
  * FinanceOS Review Screen (C3) — replaces the temporary Developer Viewer.
@@ -127,6 +128,12 @@ export function ReviewScreen({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Make Recurring (Recurring Transactions feature) — only ever available when headerId
+  // is provided, same visibility rule as Delete Transaction above (editing an
+  // already-saved transaction, never a fresh in-flight Capture).
+  const [showMakeRecurring, setShowMakeRecurring] = useState(false);
+  const [recurringCreated, setRecurringCreated] = useState(false);
 
   // Receipt Access from Review Screen (Transaction Workspace Final UX Polish) — opens the
   // SAME ReceiptViewer/fetch used by Activity/Dashboard's "View Receipt" menu item, as an
@@ -536,21 +543,47 @@ export function ReviewScreen({
             </button>
           </div>
 
-          {/* Delete Transaction (Transaction Workspace Foundation) — only ever rendered
-              when the host provided onDelete, i.e. this screen is editing an
-              already-saved transaction, not a fresh in-flight Capture. */}
-          {onDelete && (
-            <button
-              type="button"
-              onClick={() => setConfirmingDelete(true)}
-              disabled={saving}
-              className="mt-2.5 w-full text-center text-[12.5px] font-semibold text-destructive disabled:opacity-50"
-            >
-              Delete Transaction
-            </button>
+          {/* Make Recurring + Delete Transaction — both only ever rendered when editing an
+              already-saved transaction (headerId/onDelete provided), never a fresh
+              in-flight Capture. */}
+          {(headerId || onDelete) && (
+            <div className="mt-2.5 flex items-center justify-center gap-4">
+              {headerId && (
+                <button
+                  type="button"
+                  onClick={() => setShowMakeRecurring(true)}
+                  disabled={saving}
+                  className="text-center text-[12.5px] font-semibold text-primary disabled:opacity-50"
+                >
+                  Make Recurring
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(true)}
+                  disabled={saving}
+                  className="text-center text-[12.5px] font-semibold text-destructive disabled:opacity-50"
+                >
+                  Delete Transaction
+                </button>
+              )}
+            </div>
           )}
+          {recurringCreated && <p className="mt-2 text-center text-[12px] font-semibold text-primary">Recurring rule created.</p>}
         </div>
       </div>
+
+      {showMakeRecurring && headerId && (
+        <MakeRecurringModal
+          headerId={headerId}
+          onDone={() => {
+            setShowMakeRecurring(false);
+            setRecurringCreated(true);
+          }}
+          onCancel={() => setShowMakeRecurring(false)}
+        />
+      )}
 
       {/* Delete confirmation */}
       {confirmingDelete && (
