@@ -61,6 +61,14 @@ const SIMULATED_STAGE_MS = 2500;
 // message shows before the user ever submits, not just as a server-side rejection.
 const MAX_RECEIPT_PAGES = 20;
 
+// Mirrors /api/inbox's own MAX_PAGE_BYTES, kept safely under Vercel Serverless
+// Functions' hard ~4.5 MB request body limit (see compress-image.ts's doc comment).
+// Images are already shrunk well under this by compressImageFile; PDFs pass through
+// untouched, so without this check an oversized PDF silently dies at the platform's
+// transport layer before /api/inbox ever runs, surfacing as a misleading "Couldn't
+// reach the server" error instead of an actionable one.
+const MAX_PAGE_BYTES = 4 * 1024 * 1024;
+
 type ReceiptSource = "camera" | "upload" | "paste";
 
 type ReceiptPage = {
@@ -350,6 +358,11 @@ export function CaptureModal({ onClose, onSubmit }: { onClose: () => void; onSub
       return;
     }
     const compressed = await withCompressionNotice(() => Promise.all(rawFiles.map((f) => compressImageFile(f))));
+    const oversized = compressed.find((f) => f.size > MAX_PAGE_BYTES);
+    if (oversized) {
+      setNotice(`"${oversized.name}" is ${(oversized.size / (1024 * 1024)).toFixed(1)} MB — each page must be under ${MAX_PAGE_BYTES / (1024 * 1024)} MB.`);
+      return;
+    }
     const newPages = compressed.map(toPage);
     if (receipt && receipt.source === "upload") {
       setReceipt({ ...receipt, pages: [...receipt.pages, ...newPages] });
