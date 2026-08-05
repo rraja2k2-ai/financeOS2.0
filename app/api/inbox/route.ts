@@ -8,7 +8,12 @@ import { createStageTimer } from "@/lib/perf-timer";
 export const maxDuration = 60;
 
 const MAX_PAGES = 20;
-const MAX_PAGE_BYTES = 8 * 1024 * 1024;
+// Kept safely under Vercel Serverless Functions' hard ~4.5 MB request body limit (see
+// components/capture/compress-image.ts's doc comment) — a PDF this large can otherwise
+// be rejected at the platform's transport layer before this handler ever runs, which
+// the client can only observe as a generic network error. Mirrored client-side in
+// CaptureModal.tsx's own MAX_PAGE_BYTES so the friendly message shows before upload.
+const MAX_PAGE_BYTES = 4 * 1024 * 1024;
 const ALLOWED_MIME = (type: string) => type.startsWith("image/") || type === "application/pdf";
 const ALLOWED_SOURCES: CaptureSourceKind[] = ["camera", "upload", "paste", "prompt"];
 
@@ -54,7 +59,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Only images or a PDF are supported." }, { status: 400 });
     }
     if (file.size > MAX_PAGE_BYTES) {
-      return NextResponse.json({ error: "Each page must be under 8 MB." }, { status: 400 });
+      return NextResponse.json({ error: "Each page must be under 4 MB." }, { status: 400 });
     }
     pages.push({ mimeType: file.type, dataBase64: Buffer.from(await file.arrayBuffer()).toString("base64") });
   }
