@@ -14,7 +14,7 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   Savings: "Savings",
   CreditCard: "Credit Card",
   Investment: "Investment",
-  LoanToOthers: "Loan to Others",
+  LoanToOthers: "Receivable",
 };
 
 /** Safe lookup for a plain `string` account_type (e.g. from the DB row) — falls back to

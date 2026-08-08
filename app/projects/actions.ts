@@ -5,6 +5,7 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { projectRepository, projectBudgetRepository } from "@/repositories";
 import { convertToBaseCurrency } from "@/services/finance/exchange.service";
 import { PROJECT_BUDGET_MONTH } from "@/services/finance/project.service";
+import { deleteProject } from "@/services/finance/project-management.service";
 import { isGenericProject } from "@/domain/project";
 import type { BudgetType, ProjectStatus } from "@/domain/project";
 
@@ -86,7 +87,7 @@ export async function deleteProjectAction(id: string) {
     throw new Error("The Generic project cannot be deleted.");
   }
 
-  await projectRepository.remove(supabase, id);
+  await deleteProject(supabase, id);
   revalidatePath("/projects");
 }
 

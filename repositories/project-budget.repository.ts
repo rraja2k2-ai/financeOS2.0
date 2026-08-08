@@ -76,6 +76,23 @@ export async function listLifetimeByProject(supabase: SupabaseClient, projectId:
   return data || [];
 }
 
+/** Whether this project has ANY LIFETIME budget line — used to block permanent project
+ *  deletion (Project Management Service's delete guard), without fetching full rows just
+ *  to check for at least one. */
+export async function existsLifetimeForProject(supabase: SupabaseClient, projectId: string): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("project_budgets")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", projectId)
+    .eq("row_type", "LIFETIME");
+
+  if (error) {
+    throw error;
+  }
+
+  return (count ?? 0) > 0;
+}
+
 /** All LIFETIME budget lines across every project (for the Projects list page's summary pass). */
 export async function listLifetime(supabase: SupabaseClient): Promise<ProjectBudget[]> {
   const { data, error } = await supabase.from("project_budgets").select("*").eq("row_type", "LIFETIME");

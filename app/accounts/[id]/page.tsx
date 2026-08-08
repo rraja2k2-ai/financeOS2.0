@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import { accountRepository } from "@/repositories";
 import { getAccountPeriodSummary, getRecentTransactionsForAccount } from "@/services/finance/account-detail.service";
+import { getInvestmentPortfolioForAccount } from "@/services/finance/investment-portfolio.service";
 import { AccountDetailView } from "@/components/accounts/AccountDetailView";
 import { buildAccountNameMap } from "@/components/activity/activity-format";
 import { resolvePeriodRange, PERIOD_OPTIONS, type PeriodKey } from "@/lib/period";
@@ -34,10 +35,11 @@ export default async function AccountDetailPage({
 
   const { start, end } = resolvePeriodRange(period, from, to);
 
-  const [summary, recentTransactions, allAccounts] = await Promise.all([
+  const [summary, recentTransactions, allAccounts, investmentMetrics] = await Promise.all([
     getAccountPeriodSummary(supabase, id, start, end),
     getRecentTransactionsForAccount(supabase, id, account.currency, start, end, RECENT_LIMIT),
     accountRepository.list(supabase),
+    account.account_type === "Investment" ? getInvestmentPortfolioForAccount(supabase, account) : Promise.resolve(null),
   ]);
 
   return (
@@ -49,6 +51,7 @@ export default async function AccountDetailPage({
       customStart={from ?? ""}
       customEnd={to ?? ""}
       accountNameById={buildAccountNameMap(allAccounts)}
+      investmentMetrics={investmentMetrics}
     />
   );
 }

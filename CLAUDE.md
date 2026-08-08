@@ -164,6 +164,16 @@ project, and monitor accounts and investments.
   same convention Projects already uses; there is no separate "Archived"
   status value and no schema change for it). Do not reintroduce either
   field or a new status value without a fresh decision.
+- **`account_type = 'LoanToOthers'` displays as "Receivable" everywhere**
+  (Dashboard KPI Filter milestone) — the schema value itself never changes;
+  this is a display-label standardization only. Previously three different
+  UI strings existed for this one value ("Loan to Others" in
+  `constants/accounts.ts`'s `ACCOUNT_TYPE_LABELS`, "Receivable" in
+  `services/finance/accounts.service.ts`'s own local `TYPE_LABELS`, and an
+  inline "Loan to others · not held cash" in `AccountsView.tsx`) plus
+  Dashboard's own hardcoded Net Cash tab label ("Loans"). All four now say
+  "Receivable"/"Receivables". Use "Receivable" for any new surface — do not
+  reintroduce "Loan(s)" as user-facing text for this account type.
 - **`accounts.opening_balance` is creation-only and permanently historical**
   (Master Data & Account Management Refactor) — `AccountUpdateInput` never
   accepts it, so Edit Account cannot touch it after creation. **The one
@@ -815,6 +825,99 @@ transaction system of record, RLS with granular per-verb policies.
   forecasting, multi-line recurring transactions, a `recurring_rule_id`
   link on generated transactions, and any automatic (cron/background)
   generation.
+- **Dashboard KPI Filter** — the Dashboard's "Estimated Monthly Savings" row
+  was replaced with three KPI cards: Income / Expenses / Cash Surplus,
+  where Cash Surplus = Income − Expenses. `dashboard.service.ts`'s
+  `getMonthlyIncomeAndExpense` now classifies Income by
+  `transaction_type === 'INCOME'` (previously by category taxonomy via
+  `categoryTypeFor`) so both Income and Expense use the same single
+  classification axis as the rest of the app. Refund is untouched and
+  still excluded from both totals — a deliberately parked, separate
+  accounting-period discussion, not a gap to fix here.
+
+  **The three KPI cards always show the true, unfiltered totals — there is
+  no Income/Expense chip filter.** One was built during this milestone,
+  live-verified, then deliberately removed after a follow-up architecture
+  review: a personal finance dashboard's KPI row exists to tell the truth
+  about the user's position, not to expose a hide-this-number toggle, and
+  Dashboard has no other analytical surface (a Top Categories view, a
+  spend chart, a trend view) for such a filter to honestly attach to — so
+  it had no real destination and no visible purpose today (Recent
+  Transactions is intentionally an unfiltered ledger, Net Cash must stay
+  true, Budget must stay Expense-only). If a genuine analytical Dashboard
+  surface is ever added, revisit filtering there — do not reintroduce a
+  chip filter on the KPI cards themselves without a fresh decision.
+- **Investment Portfolio Version 1** — replaces the old, never-built
+  `investment_events`/`investment_snapshots`/`investment_account_summary`
+  data model (migration 028 dropped all three) with a fully derived design:
+  `services/finance/investment-portfolio.service.ts` is the single place
+  every Investment screen computes its four metrics from — **Capital
+  Invested** (`TRANSFER` in − `TRANSFER` out on the account),
+  **Current Market Value** (`accounts.current_balance`, converted to SGD —
+  already the Adjust/Correct Balance-maintained figure, already posted
+  through the Account Posting Engine as an `ADJUSTMENT`), **Portfolio
+  Gain/Loss** (Current Market Value − Capital Invested), and **Dividends /
+  Interest** (`INCOME` in). No new table, no snapshot mechanism, no second
+  accounting engine — everything derives from `transaction_headers` (via
+  the same `listByAccountId` Account Detail already uses) plus
+  `accounts.current_balance`. `ADJUSTMENT` transactions never contribute to
+  Capital Invested or Dividends — not via a special-case exclusion, but
+  because the service only ever sums `TRANSFER` and `INCOME` rows.
+  **Capital Invested is `null`, never `0`, when an account has zero
+  `TRANSFER` history** — a real calculated zero (in exactly offsets out) is
+  a distinct, valid value from "nothing to derive this from," and every
+  real Investment account in this app today falls into the latter case
+  (balances were seeded directly, never captured as transfers), so this
+  isn't a rare edge case. Portfolio Gain/Loss inherits `null` whenever
+  either Capital Invested or Current Market Value is `null` — same
+  null-propagation philosophy in both cases: never substitute zero, never
+  estimate. `getInvestmentPortfolioSummary`'s `total` follows the identical
+  rule at the aggregate level (via the shared `sumOrNull` helper) — a
+  metric with zero contributing accounts stays `null` rather than
+  collapsing to a misleading `0`; accounts missing Capital Invested are
+  excluded from that total and listed in `accountsWithoutCapitalHistory`,
+  the same convention `unconvertedCurrencies` already established for a
+  missing exchange rate. Dividends/Interest is NOT part of this — a real 0
+  there never implies anything false, so it's always a plain number. The
+  service returns `null` as-is; converting it to placeholder text is a UI
+  decision, out of scope here.
+  Terminology is deliberately conservative: **Capital Invested** and
+  **Portfolio Gain/Loss**, not "Cost Basis" or "Unrealized Gain/Loss" —
+  this account-level design has no per-holding purchase-lot data, so it
+  must not imply FIFO/average-cost/tax-accounting precision it can't
+  actually provide. A "Capital Withdrawn Above Contributions" metric was
+  considered and deliberately rejected — Activity already shows every
+  withdrawal directly, and a same-precision-problem summary metric wasn't
+  worth a fifth card. Per-holding (per-symbol/ticker) cost basis is
+  explicitly out of scope for Version 1; revisit only as a fresh, scoped
+  decision, matching how Version 1 itself was scoped.
+
+  **UI (Investment Portfolio Version 1 UI milestone):** a new top-level
+  page, `/invest` ("Investment Portfolio"), reachable from Settings —
+  analytical only, no create/edit/archive/delete of its own; all account
+  management stays exclusively under Settings → Accounts. The page shows a
+  Portfolio Summary (four KPI cards, `summary.total` from
+  `getInvestmentPortfolioSummary`) above a compact Investment Accounts
+  list (Account Name, Currency, Current Market Value, Portfolio Gain/Loss
+  only — deliberately not Capital Invested, Dividends, or any field the
+  schema doesn't have, like a broker/institution name; see §4's
+  twice-settled decision against adding one). Selecting an account
+  navigates to the existing `/accounts/[id]` page — no second detail page
+  was created. `AccountDetailView` itself was extended: when
+  `account_type === "Investment"`, a new "Investment portfolio" section
+  (the same four metrics, same `InvestmentKpiGrid` component the Portfolio
+  page uses — one shared component, not duplicated markup) renders above
+  the existing period-scoped Income/Expenses summary. The two sections are
+  deliberately not connected — Investment metrics are lifetime figures,
+  the Income/Expenses section stays wired to the existing `PeriodSelector`
+  exactly as before. Opening Balance (in "Account details") and Capital
+  Invested (in "Investment portfolio") are different facts and are
+  displayed independently, never reconciled — a real, expected
+  discrepancy for an account whose balance was seeded before its transfer
+  history existed. Every null value renders as `—` with a short muted
+  explanation ("No transfer history recorded." / "Requires Capital
+  Invested history.") — the same empty-state convention Dashboard's Budget
+  ring already established (`{pct ?? "—"}%`), not a new one.
 
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.
@@ -835,9 +938,6 @@ direction, not a passing suggestion.
   Intent Detection → Validate Accounts → Direct Save → Activity. Not yet
   implemented; requires its own milestone and design before any code is
   written.
-- **Investment module.** Data model exists (`investment_events`,
-  `investment_snapshots`, `investment_account_summary`); no UI/workflow
-  built on top of it yet.
 - **Data Management / admin tooling.** Placeholder area for future
   data-maintenance workflows (bulk edit, export/import); not designed yet.
 - **Payment Method field.** Removed from the Review UI (Account already
@@ -877,3 +977,33 @@ completion of every milestone or significant architectural change.
    - CLAUDE.md updated: Yes / No
    - Sections updated
    - Reason for the update
+
+---
+
+## 13. Release Checklist
+
+**Whenever a new table introduces a foreign key to an existing business
+entity, verify every delete workflow for that entity before release** — not
+just the new table's own. Every foreign key in this schema is a plain
+Postgres `NO ACTION` reference (no `ON DELETE CASCADE`/`SET NULL` anywhere)
+— deleting a still-referenced row always raises a raw `23503` error unless
+the application layer checks for it first. This is how the Project delete
+bug happened: Recurring Transactions added `recurring_rules.project_id`
+in one milestone, and the Project delete guard (built in a separate,
+later milestone) was never revisited to check it.
+
+Concretely: when a new table adds a foreign key to `accounts`, `projects`,
+or any other entity with its own delete/archive workflow, re-check that
+entity's delete guard (e.g. `account-management.service.ts`'s
+`deleteAccount`, `project-management.service.ts`'s `deleteProject`) covers
+the new table the same way it covers existing ones — an existence-only
+repository check (`existsForXId` / `existsActiveForXId`) plus a typed
+error with a friendly message, never a raw Postgres error reaching the UI.
+
+**Known follow-up, deliberately not fixed:** `existsActiveForAccountId`
+and `existsActiveForProjectId` (`recurring-rule.repository.ts`) only check
+`is_active = true` rules — but the FK itself blocks deletion regardless of
+`is_active`, so an *inactive* rule still referencing an account or project
+will still raise a raw FK error on delete. Narrow edge case (deactivate a
+rule without deleting it, then delete the account/project); revisit in a
+future release, not urgent enough to fix now.

@@ -8,8 +8,5 @@ export * as transactionItemRepository from "./transaction-item.repository";
 export * as receiptAttachmentRepository from "./receipt-attachment.repository";
 export * as receiptStorageRepository from "./receipt-storage.repository";
 export * as exchangeRateRepository from "./exchange-rate.repository";
-export * as investmentEventRepository from "./investment-event.repository";
-export * as investmentAccountSummaryRepository from "./investment-account-summary.repository";
-export * as investmentSnapshotRepository from "./investment-snapshot.repository";
 export * as projectBudgetRepository from "./project-budget.repository";
 export * as recurringRuleRepository from "./recurring-rule.repository";

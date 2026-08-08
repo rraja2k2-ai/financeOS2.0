@@ -11,7 +11,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import { isExpenseTransaction } from "@/lib/expense-filter";
-import { categoryTypeFor } from "@/constants/categories";
+import { TRANSACTION_TYPES } from "@/constants/transaction-types";
 import { categoryActivityHref } from "@/lib/period";
 import type { CategorySpend } from "./category-spend.service";
 
@@ -38,6 +38,13 @@ export type MonthlyIncomeAndExpense = {
  * headers-only query intentionally does not fetch) is unrelated call, not a leftover
  * duplicate of this one.
  *
+ * Both totals classify by transaction_type alone (Dashboard KPI Filter review) — Income
+ * previously used categoryTypeFor(primary_category), a second, different classification
+ * axis than Expense's transaction_type check; that mismatch is now gone, matching
+ * lib/expense-filter.ts's own "transaction_type is the only source of truth" precedent.
+ * REFUND is deliberately left out of both buckets — parked, not a bug (Refund is a
+ * separate accounting-period discussion the user explicitly deferred).
+ *
  * Graceful degradation (Dashboard v1.4 review, Fix 4): a transient query failure here
  * logs and returns zeros rather than throwing — same philosophy net-cash.service.ts
  * already applies to a missing exchange rate ("shouldn't 500 the whole Dashboard").
@@ -51,7 +58,7 @@ export async function getMonthlyIncomeAndExpense(supabase: SupabaseClient, start
       const amount = Number(header.sgd_total_amount);
       if (isExpenseTransaction(header)) {
         expense += amount;
-      } else if (categoryTypeFor(header.primary_category) === "income") {
+      } else if (header.transaction_type === TRANSACTION_TYPES.INCOME) {
         income += amount;
       }
     }

@@ -97,7 +97,7 @@ export function AccountsView({ data }: AccountsViewProps) {
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13.5px] font-semibold">{acc.accountName}</p>
                       <p className="text-[11.5px] text-muted-foreground">
-                        {acc.accountType === "LoanToOthers" ? "Loan to others · not held cash" : acc.accountType}
+                        {acc.accountType === "LoanToOthers" ? "Receivable · not held cash" : acc.accountType}
                       </p>
                     </div>
                     <div className={cn("flex-none text-right", hidden && "blur-sm select-none")}>

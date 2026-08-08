@@ -30,9 +30,12 @@ export type DashboardViewProps = {
     isCarriedForward: boolean;
     sourceMonth: string | null;
   } | null;
-  /** Income minus Expense for the current month (Dashboard v1.4 Decision Dashboard) —
-   *  already computed server-side (services/finance/dashboard.service.ts). */
-  estimatedMonthlySavings: number;
+  /** This month's totals, household-wide, transaction_type-classified (Dashboard KPI
+   *  Filter) — already computed server-side (services/finance/dashboard.service.ts's
+   *  getMonthlyIncomeAndExpense). Cash Surplus is derived client-side as Income minus
+   *  Expenses, filtered by which of the two chips below is checked. */
+  incomeSgd: number;
+  expenseSgd: number;
   /** "Day 15 of 30, expected 50%, actual 42%" — null when there's no budget to pace
    *  against (no Generic project configured), same condition the budget ring already
    *  guards on. */
@@ -49,7 +52,7 @@ export type DashboardViewProps = {
  *  exactly, so selecting a tab is a direct property lookup, never a re-derivation. */
 const NET_CASH_TABS = [
   { key: "cash", label: "Cash" },
-  { key: "loans", label: "Loans" },
+  { key: "loans", label: "Receivables" },
   { key: "creditCards", label: "Credit Cards" },
 ] as const;
 type NetCashTabKey = (typeof NET_CASH_TABS)[number]["key"];
@@ -62,7 +65,8 @@ export function DashboardView({
   monthLabel,
   netCash,
   budget,
-  estimatedMonthlySavings,
+  incomeSgd,
+  expenseSgd,
   budgetPace,
   attentionItems,
   recentTransactions: initialRecentTransactions,
@@ -73,6 +77,16 @@ export function DashboardView({
   // Net Cash tab (Dashboard v1.5) — all three buckets are already computed server-side
   // (net-cash.service.ts); switching tabs is pure client state, never a refetch.
   const [netCashTab, setNetCashTab] = useState<NetCashTabKey>("cash");
+
+  // Income / Expenses / Cash Surplus (Dashboard KPI Filter review) — always the true,
+  // unfiltered totals. A chip filter was built and then deliberately removed: Dashboard
+  // has no other analytical surface (Top Categories, a spend chart, a trend view) for
+  // such a filter to honestly drive, and Recent Transactions/Net Cash/Budget must all
+  // stay true regardless — leaving the KPI cards as the one filterable exception would
+  // have been inconsistent and risked misreading a real financial position. Revisit if a
+  // genuine analytics surface is ever added to the Dashboard.
+  // fmt() below rounds to display precision — no separate rounding needed for a plain subtraction.
+  const cashSurplus = incomeSgd - expenseSgd;
 
   // Local copy so a saved Edit can patch just the one affected card (§4/§8 — no
   // router.refresh(), no re-querying the rest of the Dashboard's data).
@@ -245,19 +259,24 @@ export function DashboardView({
           })()}
         </div>
 
-        {/* Estimated Monthly Savings (Dashboard v1.4) — Income minus Expense this month;
-            shown regardless of whether a budget is configured, since it doesn't depend
-            on one. */}
-        <div
-          className={cn(
-            "mt-2.5 flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-card px-3.5 py-3",
-            hidden && "blur-sm select-none"
-          )}
-        >
-          <span className="text-[12px] font-semibold text-muted-foreground">Estimated monthly savings</span>
-          <span className={cn("font-mono text-[14px] font-bold tabular-nums", estimatedMonthlySavings < 0 && "text-destructive")}>
-            {estimatedMonthlySavings < 0 ? "−" : ""}SGD {fmt(Math.abs(estimatedMonthlySavings), 0)}
-          </span>
+        {/* Income / Expenses / Cash Surplus (Dashboard KPI Filter review) — replaces the
+            old single "Estimated Monthly Savings" row. Always the true totals — no chip
+            filter (see the removal note above the cashSurplus calculation). */}
+        <div className={cn("mt-2.5 grid grid-cols-3 gap-2", hidden && "blur-sm select-none")}>
+          <div className="rounded-[var(--radius-md)] border border-border bg-card px-3 py-2.5">
+            <p className="text-[10.5px] font-semibold text-muted-foreground">Income</p>
+            <p className="mt-0.5 font-mono text-[13.5px] font-bold tabular-nums">SGD {fmt(incomeSgd, 0)}</p>
+          </div>
+          <div className="rounded-[var(--radius-md)] border border-border bg-card px-3 py-2.5">
+            <p className="text-[10.5px] font-semibold text-muted-foreground">Expenses</p>
+            <p className="mt-0.5 font-mono text-[13.5px] font-bold tabular-nums">SGD {fmt(expenseSgd, 0)}</p>
+          </div>
+          <div className="rounded-[var(--radius-md)] border border-border bg-card px-3 py-2.5">
+            <p className="text-[10.5px] font-semibold text-muted-foreground">Cash Surplus</p>
+            <p className={cn("mt-0.5 font-mono text-[13.5px] font-bold tabular-nums", cashSurplus < 0 && "text-destructive")}>
+              {cashSurplus < 0 ? "−" : ""}SGD {fmt(Math.abs(cashSurplus), 0)}
+            </p>
+          </div>
         </div>
 
         {budget && (

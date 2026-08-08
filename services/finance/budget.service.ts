@@ -10,7 +10,6 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as projectBudgetRepository from "@/repositories/project-budget.repository";
-import * as transactionHeaderRepository from "@/repositories/transaction-header.repository";
 import type { ProjectBudget, CategoryType } from "@/domain/project-budget";
 import type { CategorySpend } from "./category-spend.service";
 
@@ -197,18 +196,6 @@ export function combineBudgetVsActual(monthBudget: MonthBudget, categorySpend: C
   });
 
   return result.sort((a, b) => b.actualSgd - a.actualSgd);
-}
-
-/** Real total SGD spend attributed to one project in a date range (for Project Budget cards). */
-export async function getProjectActualSgd(
-  supabase: SupabaseClient,
-  projectId: string,
-  startDate: string,
-  endDate: string
-): Promise<number> {
-  const headers = await transactionHeaderRepository.listByDateRange(supabase, startDate, endDate);
-  const projectHeaders = headers.filter((h) => h.project_id === projectId);
-  return round2(projectHeaders.reduce((sum, h) => sum + Number(h.sgd_total_amount), 0));
 }
 
 function round2(n: number): number {

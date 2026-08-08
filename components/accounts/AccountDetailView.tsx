@@ -10,10 +10,12 @@ import type { Account } from "@/domain/account";
 import type { PeriodKey } from "@/lib/period";
 import type { AccountPeriodSummary } from "@/services/finance/account-detail.service";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
+import type { InvestmentPortfolioMetrics } from "@/services/finance/investment-portfolio.service";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { TransactionCard } from "@/components/activity/TransactionCard";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
 import { CorrectBalanceForm } from "@/components/accounts/CorrectBalanceForm";
+import { InvestmentKpiGrid } from "@/components/investments/InvestmentKpiGrid";
 import { useTransactionEditor } from "@/hooks/useTransactionEditor";
 import { useOverflowMenu } from "@/hooks/useOverflowMenu";
 import { accountTypeLabel } from "@/constants/accounts";
@@ -31,9 +33,14 @@ export type AccountDetailViewProps = {
   customEnd: string;
   /** id -> account_name (Transaction UX Final Polish) — see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
+  /** Investment Portfolio Version 1 — null for any non-Investment account (section isn't
+   *  rendered at all in that case); computed server-side from investment-portfolio.service.ts,
+   *  never recalculated here. Lifetime figures, deliberately NOT connected to the period
+   *  selector below (that section stays period-scoped, unchanged). */
+  investmentMetrics: InvestmentPortfolioMetrics | null;
 };
 
-export function AccountDetailView({ account, summary, recentTransactions, period, customStart, customEnd, accountNameById }: AccountDetailViewProps) {
+export function AccountDetailView({ account, summary, recentTransactions, period, customStart, customEnd, accountNameById, investmentMetrics }: AccountDetailViewProps) {
   const router = useRouter();
 
   // Edit (Transaction Workspace Foundation) — Account Detail is a new entry point to the
@@ -124,6 +131,18 @@ export function AccountDetailView({ account, summary, recentTransactions, period
           </div>
         </div>
       </section>
+
+      {/* Investment Portfolio Version 1 — lifetime figures, intentionally not wired to the
+          PeriodSelector below (that section stays period-scoped for Income/Expenses, a
+          different, unrelated concept from Capital Invested/Portfolio Gain-Loss). Opening
+          Balance above and Capital Invested here are different facts and are never
+          reconciled — a real, expected discrepancy, not a bug. */}
+      {investmentMetrics && (
+        <section className="mb-6">
+          <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Investment portfolio</p>
+          <InvestmentKpiGrid metrics={investmentMetrics} variant="detail" />
+        </section>
+      )}
 
       <PeriodSelector
         period={period}

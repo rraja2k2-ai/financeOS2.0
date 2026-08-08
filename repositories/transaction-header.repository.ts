@@ -113,6 +113,22 @@ export async function existsForAccountId(supabase: SupabaseClient, accountId: st
   return (count ?? 0) > 0;
 }
 
+/** Whether ANY transaction is assigned to this project — used to block permanent project
+ *  deletion (Project Management Service's delete guard); Mark Inactive is always safe as
+ *  the alternative regardless of this result. */
+export async function existsForProjectId(supabase: SupabaseClient, projectId: string): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("transaction_headers")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", projectId);
+
+  if (error) {
+    throw error;
+  }
+
+  return (count ?? 0) > 0;
+}
+
 /** All headers assigned to one project (for the Project module's analytics + drill-down). */
 export async function listByProjectId(supabase: SupabaseClient, projectId: string): Promise<TransactionHeader[]> {
   const { data, error } = await supabase

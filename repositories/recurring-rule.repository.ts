@@ -43,13 +43,38 @@ export async function listDue(supabase: SupabaseClient, onOrBefore: string): Pro
  *  half of the account delete guard (account-management.service.ts's deleteAccount already
  *  blocks on transaction history; this closes the gap a rule can create without ever
  *  having a transaction_headers row, since rules carry no link back from history). An
- *  Inactive rule is not a real future obligation, so it doesn't block deletion. */
+ *  Inactive rule is not a real future obligation, so it doesn't block deletion.
+ *  TODO(future release): recurring_rules.source_account_id/target_account_id have no
+ *  ON DELETE clause (migration 026), so the FK itself blocks deletion regardless of
+ *  is_active — an INACTIVE rule still referencing this account will still raise a raw
+ *  Postgres FK error here, since this check only looks at active rules. Narrow edge case
+ *  (deactivate a rule without deleting it, then delete the account) — not fixed now, see
+ *  CLAUDE.md's Release Checklist / Known Follow-ups. */
 export async function existsActiveForAccountId(supabase: SupabaseClient, accountId: string): Promise<boolean> {
   const { count, error } = await supabase
     .from("recurring_rules")
     .select("id", { count: "exact", head: true })
     .eq("is_active", true)
     .or(`source_account_id.eq.${accountId},target_account_id.eq.${accountId}`);
+
+  if (error) {
+    throw error;
+  }
+
+  return (count ?? 0) > 0;
+}
+
+/** Whether any ACTIVE rule references this project — the recurring-rule half of the
+ *  project delete guard (project-management.service.ts's deleteProject already blocks on
+ *  transaction history and lifetime budgets; this closes the gap a rule can create
+ *  without either of those existing yet). Same is_active-only scope, and the same known
+ *  gap, as existsActiveForAccountId above. */
+export async function existsActiveForProjectId(supabase: SupabaseClient, projectId: string): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("recurring_rules")
+    .select("id", { count: "exact", head: true })
+    .eq("is_active", true)
+    .eq("project_id", projectId);
 
   if (error) {
     throw error;

@@ -2,7 +2,7 @@ import Link from "next/link";
 
 const SETTINGS_ITEMS = [
   { href: "/projects", label: "Projects", description: "Project budgets and allocations" },
-  { href: "/invest", label: "Investments", description: "Investment accounts and holdings" },
+  { href: "/invest", label: "Investment Portfolio", description: "Portfolio summary and investment accounts" },
   { href: "/settings/ai", label: "AI", description: "Open the Capture Inbox" },
   { href: "/settings/appearance", label: "Appearance", description: "System, Dark, or Light theme" },
   { href: "/settings/general", label: "General", description: "Base currency" },

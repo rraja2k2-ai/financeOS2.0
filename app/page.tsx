@@ -4,7 +4,7 @@ import { getNetCashPosition } from "@/services/finance/net-cash.service";
 import { getCategorySpend } from "@/services/finance/category-spend.service";
 import { getMonthBudget, sumExpenseBudget } from "@/services/finance/budget.service";
 import { getRecentTransactions } from "@/services/finance/activity.service";
-import { getMonthlyIncomeAndExpense, computeBudgetPace, computeBudgetRemainingSgd, buildAttentionItems, round2 } from "@/services/finance/dashboard.service";
+import { getMonthlyIncomeAndExpense, computeBudgetPace, computeBudgetRemainingSgd, buildAttentionItems } from "@/services/finance/dashboard.service";
 import { listInboxItems } from "@/services/capture/inbox.service";
 import { DashboardView } from "@/components/dashboard/DashboardView";
 import { buildAccountNameMap } from "@/components/activity/activity-format";
@@ -70,7 +70,8 @@ export default async function DashboardPage() {
       monthLabel={label}
       netCash={netCash}
       budget={budget}
-      estimatedMonthlySavings={round2(monthlyIncomeAndExpense.incomeSgd - monthlyIncomeAndExpense.expenseSgd)}
+      incomeSgd={monthlyIncomeAndExpense.incomeSgd}
+      expenseSgd={monthlyIncomeAndExpense.expenseSgd}
       budgetPace={budgetPace}
       attentionItems={attentionItems}
       recentTransactions={recentTransactions}
