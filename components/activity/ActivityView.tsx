@@ -435,6 +435,7 @@ export function ActivityView({
           emptyMessage={`No items match "${query}" in this period.`}
           query={q}
           onOpenItem={openDetails}
+          showPriceIntelligence
         />
       ) : categoryFilter ? (
         <FilteredLineItemList items={categoryFilteredItems} emptyMessage="No items match this category filter." onOpenItem={openDetails} />

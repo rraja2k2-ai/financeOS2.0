@@ -9,12 +9,18 @@ export type TransactionItem = {
   primary_category: string;
   secondary_category: string;
   qty: string;
-  /** Unit of measure (kg, g, L, ml, pcs, pack, ...) — Receipt Intelligence Foundation.
-   *  Separate from `qty`'s existing free-text value+unit string; always null until a
-   *  future milestone populates it (no AI extraction or inference yet). */
+  /** Unit of measure (kg, g, L, ml, pc, pack, ...) — Receipt Intelligence Foundation.
+   *  Separate from `qty`'s existing free-text value+unit string. Populated by the AI
+   *  capture pipeline (prompts/receipt-processing.prompt.ts's item schema) when the
+   *  receipt states it directly — null when it doesn't, never inferred. Not every
+   *  historical row has this populated (pre-dates the pipeline change), so a null here is
+   *  expected and must be handled gracefully, not treated as a data error. */
   unit: string | null;
   /** Package description as printed on the receipt (e.g. "5 kg", "6 cans") — Receipt
-   *  Intelligence Foundation. Always null until a future milestone populates it. */
+   *  Intelligence Foundation. Populated by the same AI pipeline as `unit`, only for
+   *  pre-packaged items (see CLAUDE.md §6's packaged-vs-variable-weight distinction) —
+   *  null for loose/variable-weight items and for historical rows predating the pipeline
+   *  change. */
   pack_size: string | null;
   unit_price: string | null;
   item_total: string;

@@ -130,17 +130,23 @@ project, and monitor accounts and investments.
   unless a new business capability genuinely requires them. Prefer reusing
   existing tables/architecture before proposing a schema change.
 - **`transaction_items` carries three reserved, nullable item-attribute
-  columns for future Receipt Intelligence — `unit`, `pack_size`, and
+  columns for Receipt Intelligence — `unit`, `pack_size`, and
   `unit_price`** (migration 018; `unit_price` existed earlier and already
-  round-tripped through `save_transaction`). All three are foundation only:
-  every layer (domain type, repositories, `CreateTransactionInput`,
-  `ReviewedItem`, `ItemDraft`/`TransactionItemRow`) can carry them, but
-  nothing infers or calculates them, no UI shows or edits them yet, and
-  `updateReviewedTransaction` deliberately never includes them in its
-  per-item update payload — so an edit-save can never null out a value a
-  future milestone eventually writes. They stay NULL on every row until an
-  actual AI-extraction, manual-entry, or Workspace-UI milestone populates
-  them; that milestone should add to this foundation, not build a second
+  round-tripped through `save_transaction`). Every layer (domain type,
+  repositories, `CreateTransactionInput`, `ReviewedItem`,
+  `ItemDraft`/`TransactionItemRow`) carries them, and `unit`/`pack_size`
+  are now genuinely populated by the AI capture pipeline
+  (`prompts/receipt-processing.prompt.ts`'s item schema) whenever the
+  receipt states them directly — never inferred, and null for historical
+  rows predating that pipeline change or when the receipt doesn't state
+  them. `unit_price` stays what it always was: the rate exactly as printed
+  on the receipt, still never computed as `lineAmount ÷ qty` (§6) — Price
+  Intelligence (below) derives its own separate, always-recomputed value
+  and never reads or writes this column. `updateReviewedTransaction`
+  deliberately never includes any of the three in its per-item update
+  payload — an edit-save can never null one out. A future milestone
+  populating `pack_size`-driven UI (e.g. showing package size on the
+  Review Screen) should extend this foundation, not build a second
   item-attribute path.
 
 - Receipt **images/PDFs are stored only in Supabase Storage** (`receipts`
@@ -918,6 +924,65 @@ transaction system of record, RLS with granular per-verb policies.
   explanation ("No transfer history recorded." / "Requires Capital
   Invested history.") — the same empty-state convention Dashboard's Budget
   ring already established (`{pct ?? "—"}%`), not a new one.
+- **Price Intelligence (Version 1)** — helps compare what was actually paid
+  for the same grocery item over time, purely from this app's own purchase
+  history (not inventory management, not supermarket price tracking, no
+  AI). `services/finance/price-intelligence.service.ts` is the single
+  reusable place this is derived, as four pure functions with no Supabase/
+  React dependency: `getEffectiveUnit()`, `deriveUnitPrice()`,
+  `selectComparableCandidates()`, and `computePriceIntelligence()`.
+  Deliberately independent of the stored `transaction_items.unit_price`
+  column (see §4) — this derives a different, always-recomputed value,
+  never reading or writing that column.
+  - **`getEffectiveUnit(unit, qty)`** — the single source of truth for
+    "what unit is this item in." Priority: (1) the stored `unit` column,
+    always preferred when populated; (2) otherwise the trailing text
+    already present in `qty` (e.g. "kg" in "0.856 kg") — not a guess,
+    since the unit is already explicit in that text, just not duplicated
+    into its own column for that row (verified safe against 500 real
+    `unit = null` rows before shipping); (3) either way, validated
+    against the same three-family whitelist (Weight: kg, g; Volume: L,
+    ml; Count: pc, pcs, piece) — anything unrecognized (e.g. "pack",
+    "bag") or unparsable returns null, never guessed.
+  - **`deriveUnitPrice(qty, unit, itemTotal)`** — the only place that
+    performs the actual per-standard-unit calculation, using
+    `getEffectiveUnit()` for the unit and never estimating or inferring
+    when it can't be honestly derived.
+  - **`selectComparableCandidates(items, anchorText)`** — a generic,
+    Activity-agnostic domain helper: given ANY candidate collection and an
+    anchor string, returns only the items whose own `description` field
+    contains that anchor (case-insensitive, trimmed). It performs no unit
+    calculation, no grouping, no statistics, and knows nothing about
+    Search, merchants, or categories — its only job is "is this item
+    itself textually about the anchor." This is the seam a future Product
+    Master would replace (swap this narrowing step for an exact
+    product-id match) without touching `computePriceIntelligence()`, and
+    the same seam a future Grocery Analytics / Shopping List / Pantry
+    feature can reuse with a different anchor source.
+  - **`computePriceIntelligence(items)`** — groups an already-narrowed
+    candidate set by (measurement family, currency) and summarizes when
+    2+ priceable purchases share both; a group of fewer than 2 is omitted
+    rather than shown as a degenerate one-item summary. It performs no
+    candidate selection of its own — it trusts its input completely.
+  - **Search decides what's displayed; Price Intelligence decides what's
+    comparable — two independent questions, never merged.** Activity
+    Search's own predicate (item/merchant/category text, broad recall) is
+    untouched and decides the displayed row list. Before the summary card
+    is computed, `FilteredLineItemList.tsx` narrows that same displayed
+    list through `selectComparableCandidates(items, query)` and only then
+    calls `computePriceIntelligence()` on the result — so a merchant
+    match ("NTUC") or a category match ("Dairy & Eggs") never produces a
+    summary (no item's own description contains those strings), while a
+    genuine product search ("Tomato") still compares "Fresh Tomato",
+    "Organic Tomato", and "Tomato Malaysia" together, since each one's
+    own description contains "tomato". Per-row Unit Price is unaffected
+    by any of this — every displayed row still shows its own Unit Price
+    whenever `deriveUnitPrice()` can honestly derive one, regardless of
+    why Search matched it. Wired into
+    `components/activity/FilteredLineItemList.tsx` (the one component
+    Search and Category Filter already share) via a `showPriceIntelligence`
+    prop — Category Filter never passes it, since its results are an
+    arbitrary category, not a deliberate comparison.
 
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.

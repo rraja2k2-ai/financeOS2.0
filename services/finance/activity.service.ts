@@ -22,6 +22,11 @@ export type ActivityItem = {
   id: string;
   description: string | null;
   qty: string;
+  /** Unit of measure (kg, g, L, ml, pc, ...) — Receipt Intelligence Foundation, now also
+   *  consumed by Price Intelligence (services/finance/price-intelligence.service.ts) to
+   *  derive a per-standard-unit price for Activity Search. Null for rows predating the AI
+   *  pipeline's unit extraction, or when the receipt didn't state it. */
+  unit: string | null;
   unitPrice: number | null;
   itemTotal: number;
   primaryCategory: string | null;
@@ -74,6 +79,7 @@ export function toActivityTransaction(header: TransactionHeader, items: Transact
     id: it.id,
     description: it.item_description,
     qty: it.qty,
+    unit: it.unit,
     unitPrice: it.unit_price !== null ? Number(it.unit_price) : null,
     itemTotal: Number(it.item_total),
     primaryCategory: it.primary_category,
