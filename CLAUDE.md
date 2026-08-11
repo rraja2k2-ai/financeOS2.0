@@ -220,8 +220,21 @@ project, and monitor accounts and investments.
   Receivable accounts in different currencies never combine. Do not
   create a Receivable account automatically, do not create one per
   person, and do not add `person_id`/`borrower_id`/`loan_id` — per-person
-  breakdown, if ever needed, is a query over existing transaction history
-  (filter by account + read merchant), not a new column.
+  breakdown is exactly this query over existing transaction history
+  (filter by account + read merchant), not a new column. That query is
+  now built: `services/finance/receivable-breakdown.service.ts`'s
+  `getReceivableBreakdown()` derives an "Outstanding by Person" list for
+  one Receivable account, shown only in that account's own Account Detail
+  page (never on Dashboard, never a separate page) — the same
+  derive-on-read, no-new-table design as Investment Portfolio Version 1
+  (§10), reusing `account-posting.service.ts`'s `computePostingDeltas()`
+  per transaction rather than a second currency-conversion
+  implementation. Any transaction touching the account with no real
+  counterparty (an `ADJUSTMENT`, a legacy/blank-merchant row) is never
+  guessed into a person — it's captured in a single `unassigned` residual
+  (`current_balance` minus the sum of named people), which is what
+  guarantees the breakdown always reconciles to `current_balance` by
+  construction rather than by a separately-tracked, drift-prone total.
 - **`accounts.opening_balance` is creation-only and permanently historical**
   (Master Data & Account Management Refactor) — `AccountUpdateInput` never
   accepts it, so Edit Account cannot touch it after creation. **The one
