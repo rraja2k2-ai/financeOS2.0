@@ -33,6 +33,10 @@ export type AccountDetailViewProps = {
   customEnd: string;
   /** id -> account_name (Transaction UX Final Polish) — see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
+  /** id -> account_type — see activity-format.tsx's isGenuineInternalTransfer(), which
+   *  keeps a Lending move into a Receivable account (one per currency) from being mislabeled an
+   *  internal transfer here just like it is in Activity/Dashboard. */
+  accountTypeById: Record<string, string>;
   /** Investment Portfolio Version 1 — null for any non-Investment account (section isn't
    *  rendered at all in that case); computed server-side from investment-portfolio.service.ts,
    *  never recalculated here. Lifetime figures, deliberately NOT connected to the period
@@ -40,7 +44,17 @@ export type AccountDetailViewProps = {
   investmentMetrics: InvestmentPortfolioMetrics | null;
 };
 
-export function AccountDetailView({ account, summary, recentTransactions, period, customStart, customEnd, accountNameById, investmentMetrics }: AccountDetailViewProps) {
+export function AccountDetailView({
+  account,
+  summary,
+  recentTransactions,
+  period,
+  customStart,
+  customEnd,
+  accountNameById,
+  accountTypeById,
+  investmentMetrics,
+}: AccountDetailViewProps) {
   const router = useRouter();
 
   // Edit (Transaction Workspace Foundation) — Account Detail is a new entry point to the
@@ -183,6 +197,7 @@ export function AccountDetailView({ account, summary, recentTransactions, period
                 showActions
                 onActionsClick={(rect) => toggleMenu(t.id, rect)}
                 accountNameById={accountNameById}
+                accountTypeById={accountTypeById}
                 accountCurrency={account.currency}
               />
             ))}

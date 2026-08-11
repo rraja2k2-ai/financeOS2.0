@@ -169,6 +169,7 @@ export async function updateReviewedTransaction(
     reviewed.header.project,
     reviewed.header.destinationAccount
   );
+  const destinationAccountType = destinationAccountId ? (accounts.find((a) => a.id === destinationAccountId)?.account_type ?? null) : null;
 
   const subtotal = round2(reviewed.items.reduce((sum, i) => sum + (Number(i.amount) || 0), 0));
   const tax = reviewed.tax ?? 0;
@@ -191,7 +192,7 @@ export async function updateReviewedTransaction(
 
   await transactionService.updateTransaction(supabase, headerId, {
     header: {
-      merchant: resolveMerchantForSave(reviewed.header.transactionType, reviewed.header.merchant, destinationAccountId),
+      merchant: resolveMerchantForSave(reviewed.header.transactionType, reviewed.header.merchant, destinationAccountId, destinationAccountType),
       transaction_date: reviewed.header.transactionDate.trim() || new Date().toISOString().slice(0, 10),
       transaction_type: reviewed.header.transactionType,
       currency,

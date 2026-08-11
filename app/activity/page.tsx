@@ -3,7 +3,7 @@ import { getActivityWithHighlight } from "@/services/finance/activity.service";
 import { loadCaptureMasterData } from "@/services/capture/master-data.service";
 import { accountRepository } from "@/repositories";
 import { ActivityView } from "@/components/activity/ActivityView";
-import { buildAccountNameMap } from "@/components/activity/activity-format";
+import { buildAccountNameMap, buildAccountTypeMap } from "@/components/activity/activity-format";
 import { todayIso, PERIOD_OPTIONS, type PeriodKey } from "@/lib/period";
 
 function isPeriodKey(value: string | undefined): value is PeriodKey {
@@ -67,6 +67,7 @@ export default async function ActivityPage({
       categoryFilter={category}
       subcategoryFilter={subcategory}
       accountNameById={buildAccountNameMap(allAccounts)}
+      accountTypeById={buildAccountTypeMap(allAccounts)}
     />
   );
 }

@@ -46,6 +46,10 @@ export type DashboardViewProps = {
   recentTransactions: RecentTransaction[];
   /** id -> account_name (Transaction UX Final Polish) — see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
+  /** id -> account_type — see activity-format.tsx's isGenuineInternalTransfer(), which
+   *  keeps a Lending move into a Receivable account (one per currency) from being mislabeled an
+   *  internal transfer here just like it is in Activity/Account Detail. */
+  accountTypeById: Record<string, string>;
 };
 
 /** Net Cash tabs (Dashboard v1.5) — keys match NetCashPosition's own bucket fields
@@ -71,6 +75,7 @@ export function DashboardView({
   attentionItems,
   recentTransactions: initialRecentTransactions,
   accountNameById,
+  accountTypeById,
 }: DashboardViewProps) {
   const router = useRouter();
   const [hidden, setHidden] = useState(false);
@@ -372,6 +377,7 @@ export function DashboardView({
                 merchant: t.merchant,
                 sourceAccountName: t.sourceAccountId ? (accountNameById[t.sourceAccountId] ?? null) : null,
                 destinationAccountName: t.targetAccountId ? (accountNameById[t.targetAccountId] ?? null) : null,
+                destinationAccountType: t.targetAccountId ? (accountTypeById[t.targetAccountId] ?? null) : null,
               };
               const title = transactionTitle(titleInput);
               const sourceAccount = sourceAccountSubline(titleInput);

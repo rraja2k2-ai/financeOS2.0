@@ -55,6 +55,10 @@ export type ActivityViewProps = {
    *  the type-aware transaction title ("POSB Bank → MariBank" for an internal transfer),
    *  see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
+  /** id -> account_type — see activity-format.tsx's isGenuineInternalTransfer(), which
+   *  keeps a Lending move into a Receivable account (one per currency) from being mislabeled an
+   *  internal transfer (it still has a real external counterparty). */
+  accountTypeById: Record<string, string>;
 };
 
 export function ActivityView({
@@ -70,6 +74,7 @@ export function ActivityView({
   categoryFilter,
   subcategoryFilter,
   accountNameById,
+  accountTypeById,
 }: ActivityViewProps) {
   const router = useRouter();
   const highlightedTxn = highlightId ? transactions.find((t) => t.id === highlightId) : undefined;
@@ -460,6 +465,7 @@ export function ActivityView({
                 showActions
                 onActionsClick={(rect) => toggleMenu(t.id, rect)}
                 accountNameById={accountNameById}
+                accountTypeById={accountTypeById}
                 showAllItems={expandedItemsFor.has(t.id)}
                 onShowAllItems={() => setExpandedItemsFor((prev) => new Set(prev).add(t.id))}
               />
@@ -546,6 +552,7 @@ export function ActivityView({
           result={editing.result}
           capturedAt={editing.capturedAt}
           headerId={editing.headerId}
+          destinationAccountType={masterData.accounts.find((a) => a.name === editing.result.headerSuggestions.destinationAccount)?.type ?? null}
           onBack={closeDetails}
           onEdit={() => setDetailMode("edit")}
         />

@@ -47,6 +47,10 @@ export type TransactionCardProps = {
   /** id -> account_name, for the type-aware title (an internal Transfer needs the
    *  destination account's NAME) — see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
+  /** id -> account_type, so transactionTitle()/sourceAccountSubline() can tell a genuine
+   *  internal Transfer apart from a Lending move into a Receivable account (one per currency) (see
+   *  activity-format.tsx's isGenuineInternalTransfer()). */
+  accountTypeById: Record<string, string>;
   /** Bug Fix (Account Details Cross-Currency Display) — the currency of the account whose
    *  history this card is part of. Only Account Detail passes this; Activity/Dashboard
    *  leave it undefined and keep the existing currencyGroup-driven amount display below
@@ -65,6 +69,7 @@ export function TransactionCard({
   showAllItems = false,
   onShowAllItems,
   accountNameById,
+  accountTypeById,
   accountCurrency,
 }: TransactionCardProps) {
   const Icon = categoryIcon(t.primaryCategory);
@@ -73,6 +78,7 @@ export function TransactionCard({
     merchant: t.merchant,
     sourceAccountName: t.sourceAccountId ? (accountNameById[t.sourceAccountId] ?? null) : null,
     destinationAccountName: t.targetAccountId ? (accountNameById[t.targetAccountId] ?? null) : null,
+    destinationAccountType: t.targetAccountId ? (accountTypeById[t.targetAccountId] ?? null) : null,
   };
   const title = transactionTitle(titleInput);
   const sourceAccount = sourceAccountSubline(titleInput);

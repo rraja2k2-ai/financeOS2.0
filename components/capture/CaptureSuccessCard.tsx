@@ -18,6 +18,11 @@ export type CaptureSuccessSummary = {
    *  mirrors ReviewScreen's isInternalTransfer logic exactly so the two screens always
    *  agree on what's actually resolved vs. still just raw merchant/external-party text. */
   destinationAccount: string | null;
+  /** account_type of destinationAccount above, when resolved — null otherwise. Lending /
+   *  Receivables carve-out: a "LoanToOthers" destination still has a real counterparty
+   *  (mirrors ReviewScreen's/resolveMerchantForSave's own carve-out), so typeSpecificRows()
+   *  shows both the Destination Account AND the counterparty for that one case. */
+  destinationAccountType: string | null;
 };
 
 function fmtAmount(currency: string | null, total: number | null): string {
@@ -144,22 +149,26 @@ function typeSpecificRows(summary: CaptureSuccessSummary) {
           <SummaryRow label="Type" value="Income" />
         </>
       );
-    case TRANSACTION_TYPES.TRANSFER:
+    case TRANSACTION_TYPES.TRANSFER: {
       // Mirrors ReviewScreen's isInternalTransfer: only show "Destination Account" when
       // it actually resolved to a real account. Otherwise this is an External Transfer —
       // show the merchant field under its own type label ("External Party"), never
       // relabeled as a resolved destination that was never actually matched.
+      // Lending / Receivables carve-out: a "LoanToOthers" destination resolves to a real
+      // account (Receivables) but still has a real external counterparty behind it — show
+      // BOTH rows, never just Destination Account alone, so the person isn't lost.
+      const isReceivableDestination = !!summary.destinationAccount && summary.destinationAccountType === "LoanToOthers";
       return (
         <>
           <SummaryRow label="Type" value="Transfer" />
           <SummaryRow label="Source Account" value={summary.account ?? "—"} />
-          {summary.destinationAccount ? (
-            <SummaryRow label="Destination Account" value={summary.destinationAccount} />
-          ) : (
+          {summary.destinationAccount && <SummaryRow label="Destination Account" value={summary.destinationAccount} />}
+          {(!summary.destinationAccount || isReceivableDestination) && (
             <SummaryRow label="External Party" value={summary.merchant ?? "—"} />
           )}
         </>
       );
+    }
     case TRANSACTION_TYPES.REFUND:
       return (
         <>

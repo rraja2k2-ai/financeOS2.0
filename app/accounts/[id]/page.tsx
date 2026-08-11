@@ -4,7 +4,7 @@ import { accountRepository } from "@/repositories";
 import { getAccountPeriodSummary, getRecentTransactionsForAccount } from "@/services/finance/account-detail.service";
 import { getInvestmentPortfolioForAccount } from "@/services/finance/investment-portfolio.service";
 import { AccountDetailView } from "@/components/accounts/AccountDetailView";
-import { buildAccountNameMap } from "@/components/activity/activity-format";
+import { buildAccountNameMap, buildAccountTypeMap } from "@/components/activity/activity-format";
 import { resolvePeriodRange, PERIOD_OPTIONS, type PeriodKey } from "@/lib/period";
 
 // Recent Transactions relies on server-recomputed summary/preview per period change
@@ -51,6 +51,7 @@ export default async function AccountDetailPage({
       customStart={from ?? ""}
       customEnd={to ?? ""}
       accountNameById={buildAccountNameMap(allAccounts)}
+      accountTypeById={buildAccountTypeMap(allAccounts)}
       investmentMetrics={investmentMetrics}
     />
   );

@@ -213,11 +213,20 @@ export function ReviewScreen({
   }
 
   // Transaction Type Finalization — a Transfer whose destination resolves to one of the
-  // user's own accounts needs no counterparty name at all (source + destination already
-  // say everything); merchant is hidden entirely and forced empty at save
+  // user's own SPENDABLE accounts needs no counterparty name at all (source + destination
+  // already say everything); merchant is hidden entirely and forced empty at save
   // (resolveMerchantForSave). An External Transfer (no destination account picked) still
   // shows the field, labeled "External Party", optional.
-  const isInternalTransfer = headerDraft.transactionType === TRANSACTION_TYPES.TRANSFER && headerDraft.destinationAccount.trim() !== "";
+  // Lending / Receivables carve-out (mirrors resolveMerchantForSave's own carve-out): a
+  // destination account of type "LoanToOthers" (a Receivable account — there may be more
+  // than one, one per currency) still has a real external counterparty (Lokesh, Kumar,
+  // ...) that only merchant can hold, so it's never treated as an internal transfer here
+  // even though the destination did resolve.
+  const destinationAccountType = masterData.accounts.find((a) => a.name === headerDraft.destinationAccount)?.type ?? null;
+  const isInternalTransfer =
+    headerDraft.transactionType === TRANSACTION_TYPES.TRANSFER &&
+    headerDraft.destinationAccount.trim() !== "" &&
+    destinationAccountType !== "LoanToOthers";
   const merchantLabel = MERCHANT_FIELD_LABELS[headerDraft.transactionType];
 
   // The taxonomy can contain the same primary name on both the income and expense side
