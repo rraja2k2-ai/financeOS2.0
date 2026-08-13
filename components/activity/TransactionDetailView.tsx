@@ -32,6 +32,7 @@ export function TransactionDetailView({
   result,
   capturedAt,
   headerId,
+  destinationAccountType,
   onBack,
   onEdit,
 }: {
@@ -41,6 +42,12 @@ export function TransactionDetailView({
   /** Powers the receipt-viewer button, same as ReviewScreen's — omitted only if a
    *  future caller genuinely has no saved transaction yet. */
   headerId?: string;
+  /** account_type of result.headerSuggestions.destinationAccount, when resolved — the
+   *  caller already has master data loaded, so this is a zero-extra-query lookup (mirrors
+   *  ReviewScreen's own destinationAccountType). Lets isInternalTransfer below tell a
+   *  genuine internal Transfer apart from a Lending move into a Receivable account (one
+   *  per currency), which still has a real external counterparty (merchant). */
+  destinationAccountType?: string | null;
   /** Back — returns to exactly where the user came from (the filtered list, or the
    *  default Activity browsing view). Callers render this as an overlay, never a route
    *  change, so nothing here needs to save/restore that state itself. */
@@ -73,9 +80,12 @@ export function TransactionDetailView({
   const total = header.total ?? subtotal + tax - discount;
 
   // Same rule as ReviewScreen (Transaction Type Finalization): an Internal Transfer
-  // (destination resolves to one of the user's own accounts) has no counterparty to
-  // show at all — source + destination already say everything.
-  const isInternalTransfer = transactionType === TRANSACTION_TYPES.TRANSFER && !!headerSuggestions.destinationAccount;
+  // (destination resolves to one of the user's own SPENDABLE accounts) has no counterparty
+  // to show at all — source + destination already say everything. A "LoanToOthers"
+  // destination (a Receivable account (one per currency)) is the one carve-out — it still has a real
+  // external counterparty (merchant) that source+destination alone can't identify.
+  const isInternalTransfer =
+    transactionType === TRANSACTION_TYPES.TRANSFER && !!headerSuggestions.destinationAccount && destinationAccountType !== "LoanToOthers";
   const merchantLabel = MERCHANT_FIELD_LABELS[transactionType];
   const showDestination = transactionType === TRANSACTION_TYPES.TRANSFER || transactionType === TRANSACTION_TYPES.INCOME;
 

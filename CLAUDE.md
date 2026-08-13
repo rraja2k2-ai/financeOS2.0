@@ -180,6 +180,61 @@ project, and monitor accounts and investments.
   Dashboard's own hardcoded Net Cash tab label ("Loans"). All four now say
   "Receivable"/"Receivables". Use "Receivable" for any new surface — do not
   reintroduce "Loan(s)" as user-facing text for this account type.
+- **Lending is a `TRANSFER` whose destination is a `LoanToOthers` (Receivable)
+  account — not a sixth transaction type, and not a per-person account**
+  (Lending / Receivables milestone). Lending money to a person is modeled
+  exactly like any other internal Transfer: `source_account_id` is the
+  funding account, `target_account_id` resolves to a Receivable account,
+  and the Account Posting Engine posts both legs through its existing
+  unmodified `TRANSFER` rule (§ below) — no special-casing there. The one
+  genuine addition is **currency-scoped, not per-person**: FinanceOS
+  supports **one `LoanToOthers` account per currency** (e.g. "Receivables"
+  in SGD, "Receivables INR" in INR) — never one per borrower. The AI
+  (`prompts/receipt-processing.prompt.ts`) resolves `headerSuggestions.
+  destinationAccount` to whichever active `LoanToOthers` account's
+  currency matches the transaction's own currency; if none matches (no
+  Receivable account exists yet, or only a different-currency one does),
+  it leaves the destination unresolved rather than guessing or
+  cross-currency-converting — the Review Screen lets the user pick one by
+  hand. The borrower's identity (Lokesh, Kumar, ...) is never a new
+  account or a new column — it lives in `merchant` and the item
+  description, exactly like an ordinary External Transfer. Because a
+  `LoanToOthers` destination still has a real external counterparty
+  (unlike a POSB Bank → MariBank internal move), it is the one exception
+  to "an internal Transfer has no counterparty to show": `save-capture.
+  service.ts`'s `resolveMerchantForSave()`, `ReviewScreen.tsx`'s
+  `isInternalTransfer`, `TransactionDetailView.tsx`'s `isInternalTransfer`,
+  and `activity-format.tsx`'s shared `isGenuineInternalTransfer()` (used by
+  `transactionTitle()`/`sourceAccountSubline()`, and by extension every
+  `TransactionCard` — Activity, Dashboard Recent Transactions, Account
+  Detail Recent Transactions) all carve out `account_type ===
+  "LoanToOthers"` so the counterparty is preserved and displayed instead
+  of being erased/hidden the way a genuine internal Transfer's merchant
+  is. Repayment is the same `TRANSFER` in reverse (source = the Receivable
+  account, target = the receiving account) — no new mechanism. Dashboard's
+  Receivables total and Account Detail's per-account ledger both already
+  worked for this with zero changes: `net-cash.service.ts` already grouped
+  `LoanToOthers` accounts by currency and converted each to base currency
+  before this milestone (multi-currency aggregation was pre-existing, not
+  added), and Account Detail already scopes to one `accounts.id`, so two
+  Receivable accounts in different currencies never combine. Do not
+  create a Receivable account automatically, do not create one per
+  person, and do not add `person_id`/`borrower_id`/`loan_id` — per-person
+  breakdown is exactly this query over existing transaction history
+  (filter by account + read merchant), not a new column. That query is
+  now built: `services/finance/receivable-breakdown.service.ts`'s
+  `getReceivableBreakdown()` derives an "Outstanding by Person" list for
+  one Receivable account, shown only in that account's own Account Detail
+  page (never on Dashboard, never a separate page) — the same
+  derive-on-read, no-new-table design as Investment Portfolio Version 1
+  (§10), reusing `account-posting.service.ts`'s `computePostingDeltas()`
+  per transaction rather than a second currency-conversion
+  implementation. Any transaction touching the account with no real
+  counterparty (an `ADJUSTMENT`, a legacy/blank-merchant row) is never
+  guessed into a person — it's captured in a single `unassigned` residual
+  (`current_balance` minus the sum of named people), which is what
+  guarantees the breakdown always reconciles to `current_balance` by
+  construction rather than by a separately-tracked, drift-prone total.
 - **`accounts.opening_balance` is creation-only and permanently historical**
   (Master Data & Account Management Refactor) — `AccountUpdateInput` never
   accepts it, so Edit Account cannot touch it after creation. **The one
@@ -984,6 +1039,20 @@ transaction system of record, RLS with granular per-verb policies.
     prop — Category Filter never passes it, since its results are an
     arbitrary category, not a deliberate comparison.
 
+- **Lending / Receivables** — fixed the functional gap where a "Lent to
+  <person>" capture correctly classified as `TRANSFER` but never posted
+  anywhere: the AI's `destinationAccount` rule unconditionally nulled out
+  any external-party destination, so `target_account_id` stayed null and
+  the Account Posting Engine's existing (unmodified) `TRANSFER` rule had
+  nothing to post the second leg to. The fix is entirely upstream of the
+  Posting Engine — see §4's "Lending is a `TRANSFER`..." bullet for the
+  full design (one `LoanToOthers` account per currency, currency-matched
+  destination resolution, counterparty preserved in `merchant`/item
+  description, no new transaction type/table/per-person account). Also
+  corrected a stale `account-posting.service.ts` comment and a stale §11
+  Parking Lot entry, both of which incorrectly claimed cross-currency
+  destination posting wasn't implemented when it already was.
+
 **Current active milestone:** none in progress as of this writing — the
 system is in a stable, verified state pending the next scoped request.
 
@@ -1008,20 +1077,18 @@ direction, not a passing suggestion.
 - **Payment Method field.** Removed from the Review UI (Account already
   represents the payment source); no replacement is planned unless a
   concrete, distinct need is identified.
-- **Account balance posting** (needed for a cross-currency TRANSFER's
-  destination account to eventually show a real balance — reviewed,
-  confirmed feasible, not implemented, Transaction UX Final Polish milestone).
-  A transaction header stores exactly one amount/currency pair plus the
-  `exchange_rate` used to derive `sgd_total_amount` at save time — there is
-  no separate "destination-currency amount" field, and `source_account_id`/
-  `target_account_id` are already allowed to be different-currency accounts
-  today (e.g. POSB Bank (SGD) → Cash - INR). Posting to the destination
-  account in its own currency, when that's eventually built, should derive
-  the destination-currency amount from the already-stored `sgd_total_amount`
-  via a second exchange-rate lookup (base currency → destination currency,
-  the reverse direction of `exchange.service.ts`'s existing
-  `convertToBaseCurrency`) — no schema change needed, the data already on
-  the header is sufficient.
+~~**Account balance posting**~~ — **done, not a parking-lot item.** This
+  entry previously described posting a cross-currency TRANSFER's
+  destination account in its own currency as future work; the Lending /
+  Receivables milestone's research found `account-posting.service.ts`'s
+  `computePostingDeltas`/`deltaForAccount` already implement exactly this
+  (a same-currency leg uses the header's `original_amount` directly; a
+  different-currency leg derives its native amount from `sgd_total_amount`
+  via `exchange.service.ts`'s `convertFromBaseCurrency` — the reverse
+  lookup this entry called for) — a genuine CLAUDE.md staleness, now
+  corrected. The Account Posting Engine posts `source`/`target` for every
+  `TRANSFER` uniformly, regardless of currency; this is what already lets
+  Lending → Receivables (§4) work with zero Posting Engine changes.
 
 ---
 

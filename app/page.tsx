@@ -7,7 +7,7 @@ import { getRecentTransactions } from "@/services/finance/activity.service";
 import { getMonthlyIncomeAndExpense, computeBudgetPace, computeBudgetRemainingSgd, buildAttentionItems } from "@/services/finance/dashboard.service";
 import { listInboxItems } from "@/services/capture/inbox.service";
 import { DashboardView } from "@/components/dashboard/DashboardView";
-import { buildAccountNameMap } from "@/components/activity/activity-format";
+import { buildAccountNameMap, buildAccountTypeMap } from "@/components/activity/activity-format";
 
 function currentMonthRange() {
   const now = new Date();
@@ -76,6 +76,7 @@ export default async function DashboardPage() {
       attentionItems={attentionItems}
       recentTransactions={recentTransactions}
       accountNameById={buildAccountNameMap(accounts)}
+      accountTypeById={buildAccountTypeMap(accounts)}
     />
   );
 }

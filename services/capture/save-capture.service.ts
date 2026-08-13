@@ -73,17 +73,40 @@ export function amountsCanBeNegativeFor(type: TransactionType): boolean {
   return type === TRANSACTION_TYPES.ADJUSTMENT;
 }
 
+/** Account type whose destination resolution is a Receivable, not a genuine internal
+ *  account-to-account move — see resolveMerchantForSave() below. Matches constants/
+ *  accounts.ts's ACCOUNT_TYPES value; kept as a literal here (not imported) the same way
+ *  every other account_type === "LoanToOthers" check in the codebase already does. */
+const RECEIVABLE_ACCOUNT_TYPE = "LoanToOthers";
+
 /**
  * Transaction Type Finalization — merchant is reused for every type (no new column), but
- * an Internal Transfer (destination resolves to one of the user's own accounts) needs no
- * counterparty name at all: source + destination already say everything. Forces merchant
- * empty in that one case regardless of what the field holds, so a stale/AI-leftover value
- * never persists for a field the Review Screen hides. Every other case (including an
+ * an Internal Transfer (destination resolves to one of the user's own SPENDABLE accounts)
+ * needs no counterparty name at all: source + destination already say everything. Forces
+ * merchant empty in that one case regardless of what the field holds, so a stale/AI-leftover
+ * value never persists for a field the Review Screen hides. Every other case (including an
  * External Transfer, where merchant genuinely holds the external party's name) passes
  * through unchanged. Shared by save and update — never duplicated.
+ *
+ * Lending / Receivables carve-out: a destination account of type "LoanToOthers" (a
+ * Receivable account — see CLAUDE.md §4; there may be more than one, one per currency) is
+ * NOT treated as an internal transfer for this purpose, even though it resolves to a real
+ * account of the user's own. Unlike POSB Bank -> MariBank, a lend to an external person
+ * still has a real counterparty (Lokesh, Kumar, ...) that the shared Receivable account's
+ * balance can't itself carry — merchant is the only place that identity survives, so it
+ * must not be erased.
+ * `destinationAccountType` is optional (defaults to null, i.e. the pre-existing behavior)
+ * so callers that don't yet resolve it (e.g. recurring-rule.service.ts) keep working
+ * unchanged.
  */
-export function resolveMerchantForSave(type: TransactionType, merchant: string, destinationAccountId: string | null): string {
-  if (type === TRANSACTION_TYPES.TRANSFER && destinationAccountId !== null) return "";
+export function resolveMerchantForSave(
+  type: TransactionType,
+  merchant: string,
+  destinationAccountId: string | null,
+  destinationAccountType: string | null = null
+): string {
+  const isReceivableDestination = destinationAccountType === RECEIVABLE_ACCOUNT_TYPE;
+  if (type === TRANSACTION_TYPES.TRANSFER && destinationAccountId !== null && !isReceivableDestination) return "";
   return merchant.trim();
 }
 
@@ -212,11 +235,12 @@ export async function saveReviewedCapture(
 
   // 6. Build the header + items payload (same shape the atomic RPC expects). No
   //    attachment payload here — receipt bytes never touch the database.
+  const destinationAccountType = destinationAccountId ? (accounts.find((a) => a.id === destinationAccountId)?.account_type ?? null) : null;
   const payload = {
     header: {
       receipt_id: receiptId,
       transaction_date: transactionDate,
-      merchant: resolveMerchantForSave(reviewed.header.transactionType, reviewed.header.merchant, destinationAccountId),
+      merchant: resolveMerchantForSave(reviewed.header.transactionType, reviewed.header.merchant, destinationAccountId, destinationAccountType),
       transaction_type: reviewed.header.transactionType,
       primary_category: dominantCategory(reviewed.items),
       source_account_id: sourceAccountId,

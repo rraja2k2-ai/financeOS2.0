@@ -3,8 +3,9 @@ import { createServerSupabaseClient } from "@/lib/supabase";
 import { accountRepository } from "@/repositories";
 import { getAccountPeriodSummary, getRecentTransactionsForAccount } from "@/services/finance/account-detail.service";
 import { getInvestmentPortfolioForAccount } from "@/services/finance/investment-portfolio.service";
+import { getReceivableBreakdown } from "@/services/finance/receivable-breakdown.service";
 import { AccountDetailView } from "@/components/accounts/AccountDetailView";
-import { buildAccountNameMap } from "@/components/activity/activity-format";
+import { buildAccountNameMap, buildAccountTypeMap } from "@/components/activity/activity-format";
 import { resolvePeriodRange, PERIOD_OPTIONS, type PeriodKey } from "@/lib/period";
 
 // Recent Transactions relies on server-recomputed summary/preview per period change
@@ -35,11 +36,12 @@ export default async function AccountDetailPage({
 
   const { start, end } = resolvePeriodRange(period, from, to);
 
-  const [summary, recentTransactions, allAccounts, investmentMetrics] = await Promise.all([
+  const [summary, recentTransactions, allAccounts, investmentMetrics, receivableBreakdown] = await Promise.all([
     getAccountPeriodSummary(supabase, id, start, end),
     getRecentTransactionsForAccount(supabase, id, account.currency, start, end, RECENT_LIMIT),
     accountRepository.list(supabase),
     account.account_type === "Investment" ? getInvestmentPortfolioForAccount(supabase, account) : Promise.resolve(null),
+    account.account_type === "LoanToOthers" ? getReceivableBreakdown(supabase, account) : Promise.resolve(null),
   ]);
 
   return (
@@ -51,7 +53,9 @@ export default async function AccountDetailPage({
       customStart={from ?? ""}
       customEnd={to ?? ""}
       accountNameById={buildAccountNameMap(allAccounts)}
+      accountTypeById={buildAccountTypeMap(allAccounts)}
       investmentMetrics={investmentMetrics}
+      receivableBreakdown={receivableBreakdown}
     />
   );
 }

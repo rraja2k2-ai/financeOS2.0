@@ -11,6 +11,7 @@ import type { PeriodKey } from "@/lib/period";
 import type { AccountPeriodSummary } from "@/services/finance/account-detail.service";
 import type { ActivityTransaction } from "@/services/finance/activity.service";
 import type { InvestmentPortfolioMetrics } from "@/services/finance/investment-portfolio.service";
+import type { ReceivableBreakdown } from "@/services/finance/receivable-breakdown.service";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { TransactionCard } from "@/components/activity/TransactionCard";
 import { ReviewScreen } from "@/components/capture/ReviewScreen";
@@ -33,14 +34,35 @@ export type AccountDetailViewProps = {
   customEnd: string;
   /** id -> account_name (Transaction UX Final Polish) — see activity-format.tsx's transactionTitle(). */
   accountNameById: Record<string, string>;
+  /** id -> account_type — see activity-format.tsx's isGenuineInternalTransfer(), which
+   *  keeps a Lending move into a Receivable account (one per currency) from being mislabeled an
+   *  internal transfer here just like it is in Activity/Dashboard. */
+  accountTypeById: Record<string, string>;
   /** Investment Portfolio Version 1 — null for any non-Investment account (section isn't
    *  rendered at all in that case); computed server-side from investment-portfolio.service.ts,
    *  never recalculated here. Lifetime figures, deliberately NOT connected to the period
    *  selector below (that section stays period-scoped, unchanged). */
   investmentMetrics: InvestmentPortfolioMetrics | null;
+  /** Receivables person-wise analysis — null for any non-"LoanToOthers" account (section
+   *  isn't rendered at all in that case); computed server-side from
+   *  receivable-breakdown.service.ts, never recalculated here. Lifetime figures, same
+   *  "deliberately not connected to the period selector" convention as investmentMetrics
+   *  above — see that field's own comment. */
+  receivableBreakdown: ReceivableBreakdown | null;
 };
 
-export function AccountDetailView({ account, summary, recentTransactions, period, customStart, customEnd, accountNameById, investmentMetrics }: AccountDetailViewProps) {
+export function AccountDetailView({
+  account,
+  summary,
+  recentTransactions,
+  period,
+  customStart,
+  customEnd,
+  accountNameById,
+  accountTypeById,
+  investmentMetrics,
+  receivableBreakdown,
+}: AccountDetailViewProps) {
   const router = useRouter();
 
   // Edit (Transaction Workspace Foundation) — Account Detail is a new entry point to the
@@ -144,6 +166,49 @@ export function AccountDetailView({ account, summary, recentTransactions, period
         </section>
       )}
 
+      {/* Receivables person-wise analysis — lifetime figures, same "not connected to the
+          period selector" convention as Investment portfolio above (the two account types
+          are mutually exclusive, so only one of these two sections ever renders). Dashboard
+          intentionally stays aggregate-only (CLAUDE.md §4/§9) — this breakdown lives here,
+          in Account Detail, and nowhere else. */}
+      {receivableBreakdown && (
+        <section className="mb-6">
+          <p className="mb-2.5 text-[13px] font-bold uppercase tracking-wide text-muted-foreground">Outstanding by Person</p>
+          {receivableBreakdown.byPerson.length === 0 && receivableBreakdown.unassigned === 0 ? (
+            <div className="rounded-[var(--radius-lg)] border border-dashed border-border p-6 text-center text-[12.5px] text-muted-foreground">
+              No lending activity yet.
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
+              {receivableBreakdown.byPerson.map((p) => (
+                <div key={p.person} className="flex items-center justify-between border-b border-border px-3.5 py-2.5 last:border-b-0">
+                  <p className="truncate text-[13px] font-semibold">{p.person}</p>
+                  <p className={cn("font-mono text-[13px] font-bold tabular-nums", p.amount < 0 && "text-destructive")}>
+                    {p.amount < 0 ? "-" : ""}
+                    {currencyPrefix(receivableBreakdown.currency)}
+                    {fmt(Math.abs(p.amount))}
+                  </p>
+                </div>
+              ))}
+              {/* Only shown when nonzero — an honest label for whatever isn't attributable
+                  to a named person (a balance correction on this account, a legacy/blank
+                  merchant, or a nonzero opening balance), never a guessed person and never
+                  a reason to change current_balance itself. */}
+              {receivableBreakdown.unassigned !== 0 && (
+                <div className="flex items-center justify-between border-b border-border bg-secondary/40 px-3.5 py-2.5 last:border-b-0">
+                  <p className="truncate text-[13px] font-semibold text-muted-foreground">Unassigned</p>
+                  <p className={cn("font-mono text-[13px] font-bold tabular-nums text-muted-foreground", receivableBreakdown.unassigned < 0 && "text-destructive")}>
+                    {receivableBreakdown.unassigned < 0 ? "-" : ""}
+                    {currencyPrefix(receivableBreakdown.currency)}
+                    {fmt(Math.abs(receivableBreakdown.unassigned))}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       <PeriodSelector
         period={period}
         onPeriodChange={(p) => goToPeriod({ period: p })}
@@ -183,6 +248,7 @@ export function AccountDetailView({ account, summary, recentTransactions, period
                 showActions
                 onActionsClick={(rect) => toggleMenu(t.id, rect)}
                 accountNameById={accountNameById}
+                accountTypeById={accountTypeById}
                 accountCurrency={account.currency}
               />
             ))}

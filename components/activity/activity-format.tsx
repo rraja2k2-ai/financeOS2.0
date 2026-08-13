@@ -60,12 +60,34 @@ export function buildAccountNameMap(accounts: { id: string; account_name: string
   return Object.fromEntries(accounts.map((a) => [a.id, a.account_name]));
 }
 
+/** id -> account_type — same shape/build site as buildAccountNameMap above, reused by
+ *  transactionTitle()/sourceAccountSubline() below to tell a genuine internal Transfer
+ *  (POSB Bank -> MariBank) apart from a Lending move into the single "LoanToOthers"
+ *  Receivable account, which still has a real external counterparty (see
+ *  save-capture.service.ts's resolveMerchantForSave for the save-time counterpart of this
+ *  same carve-out). */
+export function buildAccountTypeMap(accounts: { id: string; account_type: string }[]): Record<string, string> {
+  return Object.fromEntries(accounts.map((a) => [a.id, a.account_type]));
+}
+
 export type TransactionTitleInput = {
   transactionType: string;
   merchant: string | null;
   sourceAccountName: string | null;
   destinationAccountName: string | null;
+  /** account_type of the destination account, when resolved — omit/null for a caller that
+   *  hasn't threaded it through yet, which preserves the pre-existing "any resolved
+   *  destination = internal transfer" behavior exactly. */
+  destinationAccountType?: string | null;
 };
+
+/** Lending / Receivables carve-out shared by transactionTitle() and sourceAccountSubline()
+ *  below — a destination account of type "LoanToOthers" is never treated as an internal
+ *  transfer, since a Receivable account (one per currency) still has a real external counterparty
+ *  (merchant) that source+destination alone can't express. */
+function isGenuineInternalTransfer(t: TransactionTitleInput): boolean {
+  return t.transactionType === TRANSACTION_TYPES.TRANSFER && !!t.destinationAccountName && t.destinationAccountType !== "LoanToOthers";
+}
 
 /** Bug Fix (Transfer Title Truncation) — the title is one CSS `truncate` span shared
  *  with an icon and an amount column, so a long "Source → Destination" string got cut
@@ -103,12 +125,15 @@ export function transactionTitle(t: TransactionTitleInput): string {
     case TRANSACTION_TYPES.INCOME:
       return merchant ?? "Income";
     case TRANSACTION_TYPES.TRANSFER: {
-      // Internal (destination resolves to one of the user's own accounts): "Source →
-      // Destination". External (no destination account — merchant holds the external
-      // party's name instead, see save-capture.service.ts's resolveMerchantForSave()).
-      if (t.destinationAccountName) {
+      // Genuine internal (destination resolves to one of the user's own SPENDABLE
+      // accounts): "Source → Destination". External, and Lending into the single
+      // Receivable account, both fall through to the merchant/counterparty name instead
+      // (see save-capture.service.ts's resolveMerchantForSave() and
+      // isGenuineInternalTransfer() above — a "LoanToOthers" destination still has a real
+      // external counterparty the shared Receivable balance alone can't identify).
+      if (isGenuineInternalTransfer(t)) {
         const source = t.sourceAccountName ? shortenAccountNameForTransferTitle(t.sourceAccountName) : "Unknown Account";
-        const destination = shortenAccountNameForTransferTitle(t.destinationAccountName);
+        const destination = shortenAccountNameForTransferTitle(t.destinationAccountName!);
         return `${source} → ${destination}`;
       }
       return merchant ?? "External Transfer";
@@ -129,8 +154,7 @@ export function transactionTitle(t: TransactionTitleInput): string {
  * repeating the source account a second time would be redundant, not helpful.
  */
 export function sourceAccountSubline(t: TransactionTitleInput): string | null {
-  const isInternalTransfer = t.transactionType === TRANSACTION_TYPES.TRANSFER && !!t.destinationAccountName;
-  if (isInternalTransfer) return null;
+  if (isGenuineInternalTransfer(t)) return null;
   return t.sourceAccountName;
 }
 

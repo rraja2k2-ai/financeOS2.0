@@ -19,8 +19,15 @@
  *                 known Milestone 2 quirk; posting only the destination avoids a
  *                 phantom debit)
  *   REFUND     -> source  +amount (reverses a prior Expense)
- *   TRANSFER   -> source −amount, target +amount (external Transfer has no target —
- *                 no Receivable/Payable account type exists to post the other side to)
+ *   TRANSFER   -> source −amount, target +amount. An external Transfer (a genuinely
+ *                 untracked outside party, or the AI/user couldn't resolve a destination)
+ *                 has no target and posts source only — but FinanceOS DOES have a
+ *                 Receivable account type ("LoanToOthers", user-facing "Receivable" — see
+ *                 CLAUDE.md §4/§5). A Lending transaction resolves target_account_id to a
+ *                 Receivable account (one per currency) exactly like any other internal
+ *                 Transfer, and posts through this same rule with no special-casing here —
+ *                 the routing decision (which account, if any) is made upstream, in the
+ *                 AI prompt and save-capture.service.ts's resolveMerchantForSave().
  *   ADJUSTMENT -> source ±amount, SIGNED by the header's own sgd_total_amount (Master
  *                 Data & Account Management Refactor, Decision 2). Every other type here
  *                 is unsigned by construction — EXPENSE always debits, INCOME always
